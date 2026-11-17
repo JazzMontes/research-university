@@ -95,3 +95,14 @@ button:disabled { cursor: wait; opacity: .65; }
 
 .message p { white-space: pre-wrap; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+
+/* Reasignación de actividades al retirar a un participante */
+.reassignments {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  padding: 10px 14px 14px;
+  margin: 8px 0 12px;
+  display: grid;
+  gap: 6px;
+  legend { font-weight: 600; padding: 0 4px; }
+}

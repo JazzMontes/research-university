@@ -1,4 +1,4 @@
-/* Conecta el acceso con PHP y muestra las vistas disponibles para el rol autenticado. */
+/* Conecta el acceso con el backend (Supabase o PHP) y muestra las vistas disponibles para el rol autenticado. */
 import { ChangeDetectorRef, Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule, NgForm } from '@angular/forms';
@@ -6,7 +6,8 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { IonicModule } from '@ionic/angular';
 import { Action, DemoRow, Field, Role, VIEWS, View } from './view-config';
 import { ApiService } from '../services/api.service';
-import { environment } from '../../environments/environment';
+import { BackendService } from '../services/backend.service';
+import { extractOfficeText } from '../services/file-text';
 import { AuthService } from '../auth/auth.service';
 
 import { Account, UsersService } from '../services/users.service';
@@ -74,6 +75,8 @@ export class PlatformPage implements OnInit {
     review_approved: 'Revisión preliminar aprobada', review_changes_requested: 'Cambios solicitados',
     review_rejected: 'Revisión preliminar rechazada', assign: 'Evaluador asignado',
     archived: 'Propuesta archivada', unarchived: 'Propuesta desarchivada',
+    evaluation_approved: 'Evaluación: aprobada', evaluation_changes_requested: 'Evaluación: cambios solicitados',
+    evaluation_rejected: 'Evaluación: rechazada',
   };
   get latestReview(): HistoryEntry | undefined {
     return this.history.find(event => event.action.startsWith('review_'));
@@ -151,7 +154,8 @@ export class PlatformPage implements OnInit {
 
   constructor(private route: ActivatedRoute, private router: Router, public auth: AuthService, private changeDetector: ChangeDetectorRef,
     private users: UsersService, private proposals: ProposalsService,
-    private catalogs: CatalogsService, private evaluations: EvaluationsService, private api: ApiService) {}
+    private catalogs: CatalogsService, private evaluations: EvaluationsService, private api: ApiService,
+    private backend: BackendService) {}
 
   // Actualiza la vista al cambiar la ruta.
   ngOnInit(): void {
@@ -293,7 +297,13 @@ export class PlatformPage implements OnInit {
     if (this.record) {
       for (const [key,value] of Object.entries(this.record)) this.values[key] = (Array.isArray(value) ? value.map(String) : value == null ? '' : String(value)) as any;
       this.values['context'] = String(this.record['project_id'] || this.record['id']);
+      // Bloqueo y restricción se proponen con el valor contrario al actual (la acción es "Cambiar").
+      for (const field of action.fields) {
+        if (field.type === 'boolean' && field.key in this.record) this.values[field.key] = Number(this.record[field.key]) ? 'false' : 'true';
+      }
     } else if (this.projectId) this.values['context'] = this.projectId;
+    this.reassignTargets = {};
+    this.removalActivities = [];
     if (this.selected) {
       const cells = this.selected.cells;
       this.values['title'] = cells[0];
@@ -349,9 +359,13 @@ export class PlatformPage implements OnInit {
     if (this.live && field.type === 'evaluator') return this.evaluators;
     return options[field.type] || [];
   }
-  isSelect(field: Field): boolean { return ['researcher', 'evaluator'].includes(field.type) || this.options(field).length > 0; }
+  // Los catálogos se muestran como lista aunque todavía estén vacíos (antes caían en un campo de texto).
+  isSelect(field: Field): boolean {
+    return ['researcher', 'evaluator', 'participant', 'activities', 'projects', 'role', 'account', 'review',
+      'activityReview', 'boolean', 'format'].includes(field.type) || this.options(field).length > 0;
+  }
   isRequired(field: Field): boolean {
-    if (field.type === 'optional' || field.key === 'email' || field.key === 'reassignments') return false;
+    if (field.type === 'optional' || field.key === 'email' || field.key === 'reassignments' || field.key === 'version_note') return false;
     if (field.key === 'responsible_researcher_id') return this.role === 'student';
     if (field.key === 'observations') return ['evaluations/submit.php','proposals/review.php'].includes(this.action?.endpoint || '') || this.values['decision'] === 'changes_requested';
     return true;
@@ -380,7 +394,7 @@ export class PlatformPage implements OnInit {
       const invalid = Object.entries(form.controls).filter(([, control]) => control.invalid);
       this.formError = 'Revisa: ' + invalid.map(([key, control]) => {
         const field = this.action?.fields.find(item => item.key === key);
-        return (field?.label || (key === 'context' ? 'Proyecto' : key)) + (control.hasError('email') ? ' (correo inválido)' : '');
+        return (field?.label || (key === 'context' ? 'Proyecto' : key.startsWith('reassign_') ? 'Reasignación de actividades' : key)) + (control.hasError('email') ? ' (correo inválido)' : '');
       }).join(', ') + '.';
       return;
     }
@@ -523,6 +537,11 @@ export class PlatformPage implements OnInit {
       if(a.fields.some(f=>f.type==='activities') && this.projectId) {
         const r=await this.api.request<any>('activities/list.php',{project_id:this.projectId}); this.activityOptions=r.items.map((x:any)=>({value:String(x.id),label:x.description}));
       }
+      // Al retirar a un participante se muestran sus actividades pendientes para reasignarlas (RN-30).
+      if(a.endpoint==='participants/remove.php' && this.projectId) {
+        const r=await this.api.request<any>('activities/list.php',{project_id:this.projectId});
+        this.removalActivities=r.items;
+      }
     } catch(e) {this.formError=e instanceof Error?e.message:'No se pudieron cargar las opciones.';}
     finally {this.saving=false; this.changeDetector.markForCheck();}
   }
@@ -536,10 +555,18 @@ export class PlatformPage implements OnInit {
       if(this.record) body[this.recordIdKey]=Number(this.record['id']);
       for(const key of ['blocked','restricted']) if(key in body) body[key]=body[key]==='true';
       for(const key of ['activity_ids','project_ids']) if(key in body && !Array.isArray(body[key])) body[key]=[body[key]].filter(Boolean);
+      if(this.action.endpoint==='participants/remove.php') {
+        const missing=this.pendingRemoval.filter(a=>!this.reassignTargets[String(a['id'])]);
+        if(missing.length) throw new Error('Elige a quién pasa cada actividad pendiente.');
+        body['reassignments']=Object.fromEntries(this.pendingRemoval.map(a=>[String(a['id']),Number(this.reassignTargets[String(a['id'])])]));
+      }
       if(this.file) {
-        if(this.file.size>10*1024*1024)throw new Error('El archivo supera 10 MB.');
+        const limit=this.backend.maxUploadBytes;
+        if(this.file.size>limit)throw new Error(`El archivo supera ${limit/1024/1024} MB.`);
         body['filename']=this.file.name;
         body['file_base64']=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('No se pudo leer el archivo.'));reader.readAsDataURL(this.file!);});
+        // Supabase no abre archivos ZIP: el texto de DOCX/XLSX para la IA se extrae aquí.
+        if(this.backend.mode==='supabase' && /\.(docx|xlsx)$/i.test(this.file.name)) body['text_content']=await extractOfficeText(this.file);
       }
       if(this.action.endpoint==='evidence/upload.php') body['activity_id']=this.record?.['id'];
       const result=await this.api.request<any>(this.action.endpoint,{},body);
@@ -561,11 +588,24 @@ export class PlatformPage implements OnInit {
     } catch(e) {this.notice=e instanceof Error?e.message:'No se pudo cargar.';}
     this.changeDetector.markForCheck();
   }
-  download(id?: number, version?: number): void {
+  async download(id?: number, version?: number): Promise<void> {
     const documentId=id || Number(this.record?.['id']); if(!documentId)return;
     const module=this.section==='institutional'?'institutional-documents':'documents';
-    const url=environment.apiBaseUrl+`/${module}/download.php?document_id=${documentId}`+(version?`&version=${version}`:'');
-    window.open(url,'_blank','noopener');
+    const params: Record<string, number>={document_id:documentId};
+    if(version) params['version']=version;
+    try { await this.backend.download(module,params); }
+    catch(e) { this.notice=e instanceof Error?e.message:'No se pudo descargar el archivo.'; }
+    finally { this.changeDetector.markForCheck(); }
+  }
+  // Reasignación de actividades pendientes al retirar a un participante.
+  reassignTargets: Record<string,string> = {};
+  removalActivities: Record<string,any>[] = [];
+  get pendingRemoval(): Record<string,any>[] {
+    const uid=String(this.values['user_id'] || '');
+    return uid ? this.removalActivities.filter(a=>String(a['participant_id'])===uid && a['status']!=='completed') : [];
+  }
+  get reassignOptions(): {value:string;label:string}[] {
+    return this.participantOptions.filter(o=>o.value!==String(this.values['user_id'] || ''));
   }
   showReport(data: any, format: string): void {
     const escape=(v:any)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));

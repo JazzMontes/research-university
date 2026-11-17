@@ -88,7 +88,7 @@ if (in_array($module,['documents','institutional-documents','evidence'],true)) {
                 $a=query($db,'SELECT * FROM activities WHERE id=? AND project_id=? FOR UPDATE',[$aid,$pid])->fetch();
                 if (!$a || (int)$a['participant_id']!==$actor || !in_array($a['status'],['pending','in_progress'],true)) fail(403,'Solo el responsable puede adjuntar evidencia antes de la revisión.');
             }
-            $title=$module==='evidence'?($body['filename']??'Evidencia'):requiredText($body,'title',250);
+            $title=$module==='evidence'?mb_substr((string)($body['filename']??'Evidencia'),0,250):requiredText($body,'title',250);
             query($db,'INSERT INTO documents(project_id,activity_id,title,kind) VALUES (?,?,?,?)',[$pid,$aid,$title,$institutional?'institutional':($module==='evidence'?'evidence':'project')]);
             $did=(int)$db->lastInsertId();
         } else {
@@ -136,6 +136,10 @@ if ($action==='detail') {
         $item['deadline_status']=$item['status']==='completed'?'Completada':($days<0?'Retrasada':($days<=3?'Próxima a vencer':'Normal'));
     }
     if ($module==='milestones') $item['activity_ids']=array_column(query($db,'SELECT activity_id FROM milestone_activities WHERE milestone_id=?',[$item['id']])->fetchAll(),'activity_id');
+    // El detalle incluye los nombres que la vista muestra como título.
+    if ($module==='participants') $item+=query($db,'SELECT name,role FROM users WHERE id=?',[$item['user_id']])->fetch() ?: [];
+    if ($module==='activities') $item['participant_name']=query($db,'SELECT name FROM users WHERE id=?',[$item['participant_id']])->fetchColumn();
+    if ($module==='closures') { $item['requester_name']=query($db,'SELECT name FROM users WHERE id=?',[$item['requested_by']])->fetchColumn(); $item['title']=$p['title']; }
     authJsonResponse(200,['item'=>$item]);
 }
 if ($action==='history') authJsonResponse(200,['items'=>query($db,'SELECT h.*,u.name AS actor_name FROM project_history h JOIN users u ON u.id=h.actor_id WHERE project_id=? AND entity=? AND entity_id=? ORDER BY h.id DESC',[$pid,($module==='activities'?'activity':rtrim($module,'s')),$item['id']??0])->fetchAll()]);
@@ -150,10 +154,11 @@ if ($module==='participants') {
         participantValid($db,$pid,$uid);
         $pending=query($db,'SELECT id FROM activities WHERE project_id=? AND participant_id=? AND status<>"completed" FOR UPDATE',[$pid,$uid])->fetchAll();
         $map=$body['reassignments']??[];
-        if (is_string($map)) $map=json_decode($map,true);
+        if (is_string($map)) $map=trim($map)===''?[]:json_decode($map,true);
         if (!is_array($map)) fail(422,'Reasignaciones debe ser un objeto JSON: {"actividad_id": usuario_id}.');
         foreach ($pending as $a) {
-            $target=idField(['target'=>$map[$a['id']]??null],'target');
+            if (!isset($map[$a['id']])) fail(422,'Elige a quién pasa la actividad #'.$a['id'].' antes de retirar al participante.');
+            $target=idField(['target'=>$map[$a['id']]],'target');
             if ($target===$uid) fail(422,'Reasigna a otro participante.'); participantValid($db,$pid,$target);
             query($db,'UPDATE activities SET participant_id=? WHERE id=?',[$target,$a['id']]);
             eventProject($db,$pid,$actor,'activity',(int)$a['id'],'reassign',['before'=>$uid,'after'=>$target]);
@@ -218,5 +223,5 @@ if ($module==='participants') {
         query($db,'UPDATE projects SET status=? WHERE id=?',[$decision==='approved'?'finalized':'active',$pid]);
     } else fail(404,'Operación no disponible.');
 }
-eventProject($db,$pid,$actor,($module==='activities'?'activity':rtrim($module,'s')),$eid,$action,['before'=>$item,'input'=>array_diff_key($body,['file_base64'=>true])]);
+eventProject($db,$pid,$actor,($module==='activities'?'activity':rtrim($module,'s')),$eid,$action,['before'=>$item,'input'=>array_diff_key($body,['file_base64'=>true,'text_content'=>true])]);
 $db->commit(); authJsonResponse(200,['id'=>$eid,'project_id'=>$pid]);

@@ -1,10 +1,12 @@
-/* Conecta el login, la consulta de sesión y el cierre con PHP mediante su cookie HttpOnly. */
+/*
+ * Conecta el login, la consulta de sesión y el cierre con el backend.
+ * Supabase: token de sesión guardado en el dispositivo (la base solo guarda su hash).
+ * PHP (XAMPP): cookie HttpOnly como antes.
+ */
 import { Injectable, signal } from '@angular/core';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { firstValueFrom, timeout } from 'rxjs';
-import { environment } from '../../environments/environment';
 import { Role, VIEWS } from '../platform/view-config';
+import { BackendResult, BackendService } from '../services/backend.service';
 
 export interface AuthUser {
   id: number;
@@ -14,7 +16,7 @@ export interface AuthUser {
   status: 'active';
 }
 
-interface SessionResponse { user: AuthUser; }
+interface SessionResponse { user: AuthUser; token?: string; message?: string; }
 
 export class AuthError extends Error {
   constructor(message: string, public readonly status = 0) { super(message); }
@@ -24,7 +26,6 @@ export class AuthError extends Error {
 export class AuthService {
   private readonly currentUser = signal<AuthUser | null>(null);
   readonly user = this.currentUser.asReadonly();
-  private readonly baseUrl = environment.apiBaseUrl.replace(/\/$/, '');
   private readonly inactivityMs = 30 * 60 * 1000;
   private readonly activityCheckMs = 60 * 1000;
   private lastActivity = 0;
@@ -36,17 +37,19 @@ export class AuthService {
   private generation = 0;
   sessionMessage = '';
 
-  constructor(private http: HttpClient, private router: Router) {}
+  constructor(private backend: BackendService, private router: Router) {}
 
   // El rol viene del servidor. No se reciben roles ni permisos desde el formulario.
   async login(username: string, password: string): Promise<AuthUser> {
     ++this.generation;
     try {
-      const response = await firstValueFrom(this.http.post<SessionResponse>(
-        `${this.baseUrl}/auth/login.php`, { username: username.trim(), password },
-        { withCredentials: true },
-      ).pipe(timeout(10000)));
+      const response = this.unwrap(await this.backend.call<SessionResponse>(
+        'auth/login.php', 'POST', { username: username.trim(), password }, 15000), true);
       const user = this.validateUser(response);
+      if (this.backend.mode === 'supabase') {
+        if (!response.token) throw new AuthError('La API no devolvió una sesión. Revisa la instalación en Supabase.', 502);
+        this.backend.setToken(response.token);
+      }
       this.sessionMessage = '';
       this.lastActivity = Date.now();
       this.acceptUser(user);
@@ -69,9 +72,10 @@ export class AuthService {
   private async fetchSession(): Promise<AuthUser | null> {
     const generation = this.generation;
     try {
-      const response = await firstValueFrom(this.http.get<SessionResponse>(
-        `${this.baseUrl}/auth/session.php`, { withCredentials: true },
-      ).pipe(timeout(10000)));
+      if (this.backend.mode === 'supabase' && !this.backend.token) {
+        throw new AuthError('Tu sesión terminó. Vuelve a iniciar sesión.', 401);
+      }
+      const response = this.unwrap(await this.backend.call<SessionResponse>('auth/session.php', 'GET', {}, 15000));
       if (generation !== this.generation) return this.user();
       const user = this.validateUser(response);
       if (!this.lastActivity) this.lastActivity = Date.now();
@@ -84,6 +88,7 @@ export class AuthService {
       const hadUser = this.user() !== null;
       this.clearUser();
       if (failure.status === 401) {
+        this.backend.setToken(null);
         this.sessionMessage = hadUser ? 'Tu sesión terminó. Vuelve a iniciar sesión.' : '';
         return null;
       }
@@ -94,8 +99,8 @@ export class AuthService {
 
   async logout(): Promise<void> {
     try {
-      await firstValueFrom(this.http.post(`${this.baseUrl}/auth/logout.php`, {},
-        { withCredentials: true }).pipe(timeout(10000)));
+      this.unwrap(await this.backend.call('auth/logout.php', 'POST', {}, 15000));
+      this.backend.setToken(null);
       this.clearUser();
       this.sessionMessage = '';
     } catch (error) {
@@ -110,9 +115,9 @@ export class AuthService {
     this.clearUser();
     this.sessionMessage = 'Tu sesión terminó por inactividad. Vuelve a iniciar sesión.';
     try {
-      await firstValueFrom(this.http.post(`${this.baseUrl}/auth/logout.php`, {},
-        { withCredentials: true }).pipe(timeout(10000)));
+      await this.backend.call('auth/logout.php', 'POST', {}, 15000);
     } catch { /* El backend también valida la expiración antes de permitir el acceso. */ }
+    this.backend.setToken(null);
     await this.router.navigate(['/login'], { replaceUrl: true });
     this.expiring = false;
   }
@@ -199,16 +204,25 @@ export class AuthService {
     return user;
   }
 
+  // Convierte la respuesta del backend en datos o en un AuthError con el código HTTP.
+  private unwrap<T>(result: BackendResult<T>, login = false): T {
+    if (result.status >= 200 && result.status < 300) return result.body;
+    throw this.explainStatus(result.status, (result.body as { message?: string } | null)?.message, login);
+  }
+
   private explainError(error: unknown, login = false): AuthError {
     if (error instanceof AuthError) return error;
-    if (error instanceof HttpErrorResponse) {
-      if (error.status === 401) return new AuthError(login ? 'Usuario o contraseña incorrectos.' : 'Tu sesión terminó. Vuelve a iniciar sesión.', 401);
-      if (error.status === 403) return new AuthError(login ? 'La cuenta está inactiva o el acceso no está autorizado.' : 'No tienes permiso para realizar esta operación.', 403);
-      if (error.status === 400 || error.status === 422) return new AuthError('Escribe tu usuario y contraseña.', error.status);
-      if (error.status === 404) return new AuthError('No se encontró la API. Revisa la dirección configurada del backend.', 404);
-      if (error.status === 0) return new AuthError('No se pudo conectar con la API. Revisa Apache, la dirección y los permisos de conexión.', 0);
-      return new AuthError('No se pudo completar la solicitud. Comprueba que el backend y MySQL estén disponibles.', error.status);
-    }
     return new AuthError('La solicitud no pudo completarse. Revisa tu conexión e inténtalo de nuevo.');
+  }
+
+  private explainStatus(status: number, message: string | undefined, login = false): AuthError {
+    if (status === 401) return new AuthError(login ? 'Usuario o contraseña incorrectos.' : 'Tu sesión terminó. Vuelve a iniciar sesión.', 401);
+    if (status === 403) return new AuthError(login ? 'La cuenta está inactiva o el acceso no está autorizado.' : 'No tienes permiso para realizar esta operación.', 403);
+    if (status === 400 || status === 422) return new AuthError('Escribe tu usuario y contraseña.', status);
+    if (status === 404) return new AuthError('No se encontró la API. Revisa la dirección configurada del backend.', 404);
+    // Mensajes de conexión o configuración que ya vienen explicados por el transporte.
+    if ((status === 0 || status >= 500) && message && !/^Internal server error/i.test(message)) return new AuthError(message, status);
+    if (status === 0) return new AuthError('No se pudo conectar con la API. Revisa la conexión.', 0);
+    return new AuthError('No se pudo completar la solicitud. Comprueba que el backend y la base de datos estén disponibles.', status);
   }
 }

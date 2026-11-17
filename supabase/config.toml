@@ -1,0 +1,6 @@
+# Configuración mínima para la CLI de Supabase (solo se usa al desplegar la función "asistente").
+project_id = "research-university"
+
+[functions.asistente]
+# La función valida la sesión de URPMP con research_api; no usa sesiones de Supabase Auth.
+verify_jwt = false

@@ -1,0 +1,28 @@
+# (Opcional) Despliega la función Edge "asistente" y guarda la clave de IA en Supabase.
+# Alternativa sin este flujo: copiar supabase/functions/asistente/index.ts en el editor del Dashboard.
+# Secretos del repositorio (Settings → Secrets and variables → Actions → Secrets):
+#   SUPABASE_ACCESS_TOKEN  (supabase.com → Account → Access Tokens)
+#   SUPABASE_PROJECT_REF   (el id de tu proyecto: la parte xxxx de https://xxxx.supabase.co)
+#   AI_API_KEY             (clave de Gemini, OpenAI, Groq u OpenRouter)
+name: Desplegar asistente de IA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Guardar la clave de IA
+        if: env.AI_API_KEY != ''
+        run: supabase secrets set AI_API_KEY="$AI_API_KEY" --project-ref "$PROJECT_REF"
+      - name: "Desplegar función (sin verificación JWT: la sesión la valida la base)"
+        run: supabase functions deploy asistente --project-ref "$PROJECT_REF" --no-verify-jwt

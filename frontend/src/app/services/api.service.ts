@@ -1,26 +1,24 @@
+/* Envía las operaciones de la plataforma al backend configurado (Supabase o PHP). */
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { firstValueFrom, timeout } from 'rxjs';
-import { environment } from '../../environments/environment';
+import { BackendService } from './backend.service';
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
-  constructor(private http: HttpClient, private router: Router) {}
+  constructor(private backend: BackendService, private router: Router) {}
 
+  // Sin body es una consulta (GET); con body es una operación (POST), igual que los archivos PHP.
   async request<T>(path: string, params: Record<string, string | number> = {}, body?: object): Promise<T> {
-    const url = environment.apiBaseUrl.replace(/\/$/, '') + '/' + path;
-    try {
-      const options = { params, withCredentials: true };
-      return await firstValueFrom((body ? this.http.post<T>(url, body, options)
-        : this.http.get<T>(url, options)).pipe(timeout(path.startsWith('assistant/') ? 65000 : 15000)));
-    } catch (error) {
-      if (error instanceof HttpErrorResponse && error.status === 401) {
-        await this.router.navigate(['/login'], { replaceUrl: true });
-        throw new Error('Tu sesión terminó. Vuelve a iniciar sesión.');
-      }
-      throw new Error(error instanceof HttpErrorResponse && error.error?.message
-        ? error.error.message : 'No se pudo completar la solicitud. Revisa la conexión con la API.');
+    const method = body ? 'POST' : 'GET';
+    const wait = path.startsWith('assistant/') ? 65000 : body && 'file_base64' in body ? 60000 : 15000;
+    const result = await this.backend.call<T>(path, method, (body ?? params) as Record<string, unknown>, wait);
+    if (result.status >= 200 && result.status < 300) return result.body;
+    if (result.status === 401) {
+      this.backend.setToken(null);
+      await this.router.navigate(['/login'], { replaceUrl: true });
+      throw new Error('Tu sesión terminó. Vuelve a iniciar sesión.');
     }
+    const message = (result.body as { message?: string } | null)?.message;
+    throw new Error(message || 'No se pudo completar la solicitud. Revisa la conexión con la API.');
   }
 }

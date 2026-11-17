@@ -184,7 +184,18 @@
         <form #form="ngForm" (ngSubmit)="submitForm(form)">
           @if (!selected && section !== 'users' && section !== 'institutional' && action.endpoint !== 'proposals/create.php' && section !== 'activities' && section !== 'milestones' && section !== 'participants' && section !== 'documents' && section !== 'closures') { <label for="context">{{ section === 'evaluations' ? 'Propuesta' : 'Proyecto' }}</label><select id="context" name="context" [(ngModel)]="values['context']" required><option value="">Seleccionar…</option>@for (p of projectOptions; track p.value) { <option [value]="p.value">{{ p.label }}</option> }</select> }
           @for (field of action.fields; track field.key) {
-            @if (field.key !== 'responsible_researcher_id' || role === 'student') {
+            @if (field.key === 'reassignments') {
+              <fieldset class="reassignments">
+                <legend>Actividades pendientes del participante</legend>
+                @for (activity of pendingRemoval; track activity['id']) {
+                  <label [for]="'reassign_' + activity['id']">{{ activity['description'] }} · {{ label(activity['status']) }} *</label>
+                  <select [id]="'reassign_' + activity['id']" [name]="'reassign_' + activity['id']" [(ngModel)]="reassignTargets[activity['id']]" required>
+                    <option value="" disabled>Reasignar a…</option>
+                    @for (option of reassignOptions; track option.value) { <option [value]="option.value">{{ option.label }}</option> }
+                  </select>
+                } @empty { <p class="muted">No tiene actividades pendientes; se puede retirar directamente.</p> }
+              </fieldset>
+            } @else if (field.key !== 'responsible_researcher_id' || role === 'student') {
               <label [for]="field.key">{{ field.label }}{{ isRequired(field) ? ' *' : ' (opcional)' }}</label>
               @if (isSelect(field)) {
                 @if (field.key === 'activity_ids' || field.key === 'project_ids') {

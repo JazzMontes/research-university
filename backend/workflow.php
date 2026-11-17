@@ -192,7 +192,7 @@ try {
             activeRole($db,$evaluator,'evaluator');
             query($db,'INSERT INTO evaluation_assignments (proposal_id,evaluator_id,assigned_by) VALUES (?,?,?)',[$id,$evaluator,$actor]);
             $after='under_evaluation';
-            $observations="Evaluador #$evaluator";
+            $observations='Evaluador: '.query($db,'SELECT name FROM users WHERE id=?',[$evaluator])->fetchColumn();
             break;
         case 'assignments':
             authJsonResponse(200,['items'=>query($db,'SELECT a.*,u.name AS evaluator_name FROM evaluation_assignments a JOIN users u ON u.id=a.evaluator_id WHERE a.proposal_id=?'.($role==='evaluator'?' AND a.evaluator_id=? AND a.is_active=1':'').' ORDER BY a.id DESC',$role==='evaluator'?[$id,$actor]:[$id])->fetchAll()]);

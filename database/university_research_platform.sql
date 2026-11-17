@@ -1,4 +1,8 @@
-/*este sql es para importar por si schema.sql sigue sin funcionar directamente.
+/* ⚠ NO USAR CON ESTE BACKEND.
+   Este volcado es de una versión anterior del modelo (project_participants, project_closures,
+   evidence, institutional_documents, documents sin "kind", projects sin "title"...).
+   El código PHP y la versión de Supabase usan las tablas de schema.sql: importa schema.sql.
+   Se conserva solo como referencia histórica.
 */
 
 

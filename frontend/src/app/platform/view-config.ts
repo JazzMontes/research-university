@@ -691,21 +691,6 @@ export const VIEWS: View[] = [
             "key": "file",
             "label": "Archivo",
             "type": "file"
-          }
-        ]
-      },
-      {
-        "label": "Subir nueva versión",
-        "endpoint": "documents/upload-version.php",
-        "roles": [
-          "student",
-          "researcher"
-        ],
-        "fields": [
-          {
-            "key": "file",
-            "label": "Archivo",
-            "type": "file"
           },
           {
             "key": "version_note",
