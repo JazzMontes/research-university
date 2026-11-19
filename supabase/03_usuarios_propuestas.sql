@@ -1,10 +1,13 @@
 -- =====================================================================
--- URPMP · 03 · Usuarios, catálogos, propuestas, evaluaciones y tablero
--- Flujo (diagrama 1):
---  Estudiante registra → investigador revisa (aprueba / pide cambios / rechaza)
---  → Coordinación asigna evaluador (puede archivar/desarchivar)
---  → Evaluador aprueba (se crea el proyecto) / pide modificaciones / rechaza.
---  El investigador puede registrar su propia propuesta (va directo a Coordinación).
+-- URPMP · 03 · Usuarios, catálogos, propuestas y tablero (versión 3)
+-- Flujo de propuestas (sin evaluador):
+--  Estudiante registra → Investigador responsable revisa → Coordinación decide.
+--  Investigador registra su propia propuesta → Coordinación decide.
+--  Quien revisa puede: Aprobar · Solicitar cambios · Rechazar.
+--  Cuando Coordinación aprueba se crea el proyecto automáticamente.
+--  Con "Cambios solicitados" el autor corrige y reenvía en un solo paso;
+--  la propuesta regresa a quien pidió los cambios.
+--  El autor o Coordinación pueden cancelar (y reactivar si fue un error).
 -- =====================================================================
 
 create or replace function research.user_json(t research.users)
@@ -13,31 +16,83 @@ returns jsonb language sql stable as $$
     'role', t.role, 'status', t.status, 'created_at', t.created_at, 'updated_at', t.updated_at);
 $$;
 
+create or replace function research.valid_username(v text)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+begin
+  if v !~ '^[A-Za-z0-9._-]{3,80}$' then
+    perform research.fail(422, 'El usuario debe tener al menos 3 caracteres: letras, números, punto, guion o guion bajo (sin espacios).');
+  end if;
+end $$;
+
+create or replace function research.valid_email(v text)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+begin
+  if v <> '' and v !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then perform research.fail(422, 'Correo inválido.'); end if;
+end $$;
+
+-- Antes de cambiar el rol o desactivar una cuenta, se revisa que no deje trabajo sin dueño.
+create or replace function research.user_can_leave(t research.users, new_role text, new_status text)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare titles text;
+begin
+  if t.role = 'researcher' and (new_role <> 'researcher' or new_status = 'inactive') then
+    select string_agg('«' || title || '»', ', ') into titles from research.projects
+      where responsible_researcher_id = t.id and status in ('active', 'changes', 'closing');
+    if titles is not null then
+      perform research.fail(409, 'Es investigador responsable de ' || titles || '. Primero cambia el responsable desde el proyecto.');
+    end if;
+    select string_agg('«' || title || '»', ', ') into titles from research.proposals
+      where responsible_researcher_id = t.id and author_id <> t.id and status = 'pending_researcher_review';
+    if titles is not null then
+      perform research.fail(409, 'Tiene propuestas de estudiantes por revisar: ' || titles || '. Pídele que las revise o que el autor cancele.');
+    end if;
+  end if;
+  if new_role not in ('student', 'researcher') or new_status = 'inactive' then
+    select string_agg(distinct '«' || p.title || '»', ', ') into titles
+      from research.activities a join research.projects p on p.id = a.project_id
+      where a.participant_id = t.id and a.status in ('pending', 'in_review', 'changes') and p.status in ('active', 'changes', 'closing');
+    if titles is not null then
+      perform research.fail(409, 'Tiene actividades sin terminar en ' || titles || '. Retíralo del equipo (sus actividades se reasignan) o reasígnalas primero.');
+    end if;
+    if new_role not in ('student', 'researcher') and exists (
+         select 1 from research.participants x join research.projects p on p.id = x.project_id
+         where x.user_id = t.id and x.is_active = 1 and p.status in ('active', 'changes', 'closing')) then
+      perform research.fail(409, 'Participa en proyectos en curso. Primero retíralo del equipo de esos proyectos.');
+    end if;
+  end if;
+end $$;
+
 create or replace function research.ep_users(u research.users, act text, d jsonb)
 returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
 declare
-  t research.users; new_id integer; v_role text; v_pwd text; v_email text; v_status text; v_name text; v_username text;
+  t research.users; v_role text; v_pwd text; v_email text; v_status text; v_name text; v_username text;
 begin
   if u.role <> 'coordinator' then perform research.fail(403, 'Solo Coordinación administra usuarios.'); end if;
 
   if act = 'list' then
     return research.ok(jsonb_build_object('items',
-      (select coalesce(jsonb_agg(research.user_json(x) order by x.name, x.id), '[]') from research.users x)));
+      (select coalesce(jsonb_agg(research.user_json(x) order by x.status, x.name, x.id), '[]') from research.users x)));
   end if;
 
   if act = 'create' then
     v_role := research.req_text(d, 'role', 30);
-    if v_role not in ('student','researcher','evaluator','coordinator') then perform research.fail(422, 'Rol inválido.'); end if;
+    if v_role not in ('student','researcher','coordinator') then perform research.fail(422, 'Rol inválido.'); end if;
     v_pwd := research.req_text(d, 'password', 72);
     if not research.valid_password(v_pwd) then perform research.fail(422, 'La contraseña necesita de 8 a 72 caracteres con mayúscula, minúscula y número.'); end if;
     v_email := research.opt_text(d, 'email', 254);
-    if v_email <> '' and v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then perform research.fail(422, 'Correo inválido.'); end if;
+    perform research.valid_email(v_email);
     v_name := research.req_text(d, 'name', 150);
     v_username := research.req_text(d, 'username', 80);
-    if v_username !~ '^[A-Za-z0-9._-]{3,80}$' then perform research.fail(422, 'El usuario debe tener al menos 3 caracteres: letras, números, punto, guion o guion bajo.'); end if;
+    perform research.valid_username(v_username);
     if exists (select 1 from research.users where lower(username) = lower(v_username)) then
-      perform research.fail(409, 'Ese nombre de usuario ya existe.');
+      perform research.fail(409, 'Ese nombre de usuario ya existe. Elige otro.');
+    end if;
+    if v_email <> '' and exists (select 1 from research.users where lower(email) = lower(v_email)) then
+      perform research.fail(409, 'Ya hay una cuenta con ese correo. Revisa que no estés duplicando a la persona.');
     end if;
     insert into research.users (name, username, email, password_hash, role)
       values (v_name, v_username, nullif(v_email, ''), research.hash_password(v_pwd), v_role)
@@ -48,56 +103,42 @@ begin
   select * into t from research.users where id = research.req_id(d, 'user_id') for update;
   if t.id is null then perform research.fail(404, 'Usuario no encontrado.'); end if;
 
-  if act = 'detail' then return research.ok(jsonb_build_object('user', research.user_json(t))); end if;
-
   if act = 'update' then
-    v_email := case when d ? 'email' then research.opt_text(d, 'email', 254) else coalesce(t.email, '') end;
-    if v_email <> '' and v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then perform research.fail(422, 'Correo inválido.'); end if;
+    -- Un solo formulario: datos, rol y estado.
+    v_name := research.req_text(d, 'name', 150);
     v_username := research.req_text(d, 'username', 80);
-    if v_username !~ '^[A-Za-z0-9._-]{3,80}$' then perform research.fail(422, 'El usuario debe tener al menos 3 caracteres: letras, números, punto, guion o guion bajo.'); end if;
+    perform research.valid_username(v_username);
     if exists (select 1 from research.users where lower(username) = lower(v_username) and id <> t.id) then
-      perform research.fail(409, 'Ese nombre de usuario ya existe.');
+      perform research.fail(409, 'Ese nombre de usuario ya existe. Elige otro.');
     end if;
-    update research.users set name = research.req_text(d, 'name', 150), username = v_username,
-      email = nullif(v_email, ''), updated_at = now() where id = t.id;
-  elsif act = 'change-status' then
-    v_status := research.req_text(d, 'status', 10);
+    v_email := research.opt_text(d, 'email', 254);
+    perform research.valid_email(v_email);
+    if v_email <> '' and exists (select 1 from research.users where lower(email) = lower(v_email) and id <> t.id) then
+      perform research.fail(409, 'Ya hay otra cuenta con ese correo.');
+    end if;
+    v_role := coalesce(nullif(research.opt_text(d, 'role', 30), ''), t.role);
+    if v_role not in ('student','researcher','coordinator') then perform research.fail(422, 'Rol inválido.'); end if;
+    v_status := coalesce(nullif(research.opt_text(d, 'status', 10), ''), t.status);
     if v_status not in ('active', 'inactive') then perform research.fail(422, 'Estado inválido.'); end if;
-    if t.id = u.id and v_status = 'inactive' then perform research.fail(409, 'No puedes desactivar tu propia cuenta.'); end if;
-    update research.users set status = v_status, updated_at = now() where id = t.id;
-  elsif act = 'change-role' then
-    v_role := research.req_text(d, 'role', 30);
-    if v_role not in ('student','researcher','evaluator','coordinator') then perform research.fail(422, 'Rol inválido.'); end if;
     if t.id = u.id and v_role <> u.role then perform research.fail(409, 'No puedes cambiar tu propio rol.'); end if;
-    if v_role <> t.role then
-      if t.role = 'researcher' and (
-           (select count(*) from research.projects where responsible_researcher_id = t.id and status <> 'finalized') +
-           (select count(*) from research.proposals where responsible_researcher_id = t.id and status not in ('approved','rejected'))) > 0 then
-        perform research.fail(409, 'Primero reasigna los proyectos y propuestas pendientes de este investigador.');
-      end if;
-      if v_role not in ('student','researcher') and exists (
-           select 1 from research.participants x join research.projects p on p.id = x.project_id
-           where x.user_id = t.id and x.is_active = 1 and p.status <> 'finalized') then
-        perform research.fail(409, 'Primero retira esta cuenta de los proyectos en los que participa.');
-      end if;
-      if t.role = 'evaluator' and exists (
-           select 1 from research.evaluation_assignments a join research.proposals p on p.id = a.proposal_id
-           where a.evaluator_id = t.id and a.is_active = 1 and p.status in ('under_evaluation','changes_requested_evaluator')) then
-        perform research.fail(409, 'La cuenta tiene evaluaciones pendientes.');
-      end if;
+    if t.id = u.id and v_status = 'inactive' then perform research.fail(409, 'No puedes desactivar tu propia cuenta.'); end if;
+    if v_role <> t.role or (v_status = 'inactive' and t.status = 'active') then
+      perform research.user_can_leave(t, v_role, v_status);
     end if;
-    update research.users set role = v_role, updated_at = now() where id = t.id;
+    update research.users set name = v_name, username = v_username, email = nullif(v_email, ''),
+      role = v_role, status = v_status, updated_at = now() where id = t.id;
+    if v_role <> t.role or v_status <> t.status then
+      update research.user_sessions set revoked_at = now() where user_id = t.id and revoked_at is null;
+    end if;
   elsif act = 'reset-password' then
     v_pwd := research.req_text(d, 'password', 72);
     if not research.valid_password(v_pwd) then perform research.fail(422, 'La contraseña necesita de 8 a 72 caracteres con mayúscula, minúscula y número.'); end if;
     update research.users set password_hash = research.hash_password(v_pwd), updated_at = now() where id = t.id;
+    update research.user_sessions set revoked_at = now() where user_id = t.id and revoked_at is null;
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;
 
-  if act in ('change-status', 'change-role', 'reset-password') then
-    update research.user_sessions set revoked_at = now() where user_id = t.id and revoked_at is null;
-  end if;
   select * into t from research.users where id = t.id;
   return research.ok(jsonb_build_object('user', research.user_json(t)));
 end $$;
@@ -108,26 +149,15 @@ returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
 declare p research.projects;
 begin
-  if act = 'roles' then
-    if u.role <> 'coordinator' then perform research.fail(403, 'Acceso denegado.'); end if;
-    return research.ok(jsonb_build_object('items', jsonb_build_array(
-      jsonb_build_object('value', 'student', 'label', 'Estudiante'),
-      jsonb_build_object('value', 'researcher', 'label', 'Investigador'),
-      jsonb_build_object('value', 'evaluator', 'label', 'Evaluador'),
-      jsonb_build_object('value', 'coordinator', 'label', 'Coordinador'))));
-  elsif act in ('researchers', 'evaluators') then
-    if (act = 'researchers' and u.role not in ('student', 'coordinator', 'researcher'))
-       or (act = 'evaluators' and u.role <> 'coordinator') then
-      perform research.fail(403, 'Acceso denegado.');
-    end if;
+  if act = 'researchers' then
     return research.ok(jsonb_build_object('items', (
       select coalesce(jsonb_agg(jsonb_build_object('id', id, 'name', name) order by name), '[]')
-      from research.users where status = 'active' and role = case act when 'researchers' then 'researcher' else 'evaluator' end)));
+      from research.users where status = 'active' and role = 'researcher')));
   elsif act = 'participants' then
     p := research.project_access(u, research.req_id(d, 'project_id'));
     if coalesce(d ->> 'all', '') = '1' then
       perform research.project_lead(p, u);
-      -- Cuentas que todavía no participan activamente (para "Agregar participante").
+      -- Cuentas que todavía no participan activamente (para "Agregar integrante").
       return research.ok(jsonb_build_object('items', (
         select coalesce(jsonb_agg(jsonb_build_object('id', x.id, 'name', x.name, 'role', x.role) order by x.name), '[]')
         from research.users x where x.role in ('student', 'researcher') and x.status = 'active'
@@ -146,64 +176,48 @@ end $$;
 create or replace function research.proposal_json(p research.proposals)
 returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
-  select to_jsonb(p) || jsonb_build_object(
+  select to_jsonb(p) - 'is_archived' - 'status_before_archive' - 'correction_pending_resubmit' || jsonb_build_object(
     'researcher_name', (select name from research.users where id = p.responsible_researcher_id),
     'author_name', (select name from research.users where id = p.author_id),
+    'author_role', (select role from research.users where id = p.author_id),
     'project_id', (select id from research.projects where proposal_id = p.id),
-    'evaluator_name', (select x.name from research.evaluation_assignments a join research.users x on x.id = a.evaluator_id
-                       where a.proposal_id = p.id and a.is_active = 1 order by a.id desc limit 1));
+    -- Última observación de quien revisó (se muestra al autor para corregir).
+    'last_observation', (select jsonb_build_object('details', h.details, 'actor_name', x.name, 'action', h.action, 'created_at', h.created_at)
+                         from research.proposal_history h left join research.users x on x.id = h.actor_id
+                         where h.proposal_id = p.id and h.details is not null
+                           and h.action in ('review_changes_requested', 'review_rejected', 'review_approved', 'cancelled')
+                         order by h.id desc limit 1));
 $$;
 
 create or replace function research.proposal_history_add(pid integer, actor integer, act text, before_s text, after_s text, details text default null)
 returns void language sql
 set search_path = research, extensions, pg_temp as $$
   insert into research.proposal_history (proposal_id, actor_id, action, previous_status, new_status, details)
-  values (pid, actor, act, before_s, after_s, details);
+  values (pid, actor, act, before_s, after_s, nullif(details, ''));
 $$;
 
-create or replace function research.ep_proposals(u research.users, module text, act text, d jsonb)
+create or replace function research.ep_proposals(u research.users, act text, d jsonb)
 returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
 declare
   p research.proposals; pid integer; researcher integer; v_status text; before_s text; after_s text;
-  obs text; decision text; evaluator integer; new_project integer; v_archive boolean; was_archived boolean;
-  v_limit integer; v_page integer; v_total integer; v_search text; v_filter_status text; v_filter_archived text;
-  log_action text; changed integer := 0;
+  obs text; decision text; new_project integer; v_limit integer; v_page integer; v_total integer;
+  v_search text; v_filter text; log_action text;
 begin
-  -- Lista de asignaciones de evaluación (vista "Evaluaciones").
-  if act = 'assignments' and not research.has(d, 'proposal_id') then
-    return research.ok(jsonb_build_object('items', (
-      select coalesce(jsonb_agg(jsonb_build_object(
-        'id', a.id, 'proposal_id', a.proposal_id, 'assigned_at', a.assigned_at, 'is_active', a.is_active,
-        'title', x.title, 'status', x.status, 'is_archived', x.is_archived,
-        'evaluator_name', ev.name, 'author_name', au.name,
-        'decision', (select e.decision from research.evaluations e where e.proposal_id = a.proposal_id
-                     and e.evaluator_id = a.evaluator_id order by e.id desc limit 1)) order by a.id desc), '[]')
-      from research.evaluation_assignments a
-      join research.proposals x on x.id = a.proposal_id
-      join research.users ev on ev.id = a.evaluator_id
-      join research.users au on au.id = x.author_id
-      where research.proposal_visible(u, x) and (u.role <> 'evaluator' or (a.evaluator_id = u.id and a.is_active = 1)))));
-  end if;
-
   if act = 'list' then
-    v_filter_status := coalesce(d ->> 'status', '');
-    v_filter_archived := coalesce(d ->> 'archived', '');
-    if v_filter_archived not in ('', '0', '1') then perform research.fail(422, 'archived debe ser 0 o 1.'); end if;
+    v_filter := coalesce(d ->> 'status', '');
     v_search := coalesce(btrim(d ->> 'search'), '');
     v_limit := greatest(1, least(100, coalesce(nullif(d ->> 'limit', '')::integer, 20)));
     v_page := greatest(1, least(100000, coalesce(nullif(d ->> 'page', '')::integer, 1)));
     select count(*) into v_total from research.proposals x
       where research.proposal_visible(u, x)
-        and (v_filter_status = '' or x.status = v_filter_status)
-        and (v_filter_archived = '' or x.is_archived = v_filter_archived::smallint)
+        and (v_filter = '' or x.status = v_filter or (v_filter = 'in_review' and x.status in ('pending_researcher_review', 'pending_coordinator')))
         and (v_search = '' or extensions.unaccent(lower(x.title)) like '%' || extensions.unaccent(lower(v_search)) || '%');
     return research.ok(jsonb_build_object('page', v_page, 'limit', v_limit, 'total', v_total, 'items', (
       select coalesce(jsonb_agg(research.proposal_json(y) order by y.id desc), '[]') from (
         select x.* from research.proposals x
         where research.proposal_visible(u, x)
-          and (v_filter_status = '' or x.status = v_filter_status)
-          and (v_filter_archived = '' or x.is_archived = v_filter_archived::smallint)
+          and (v_filter = '' or x.status = v_filter or (v_filter = 'in_review' and x.status in ('pending_researcher_review', 'pending_coordinator')))
           and (v_search = '' or extensions.unaccent(lower(x.title)) like '%' || extensions.unaccent(lower(v_search)) || '%')
         order by x.id desc limit v_limit offset (v_page - 1) * v_limit) y)));
   end if;
@@ -226,7 +240,6 @@ begin
   select * into p from research.proposals where id = pid for update;
   if p.id is null or not research.proposal_visible(u, p) then perform research.fail(404, 'Propuesta no disponible.'); end if;
   before_s := p.status; after_s := before_s; obs := null; log_action := act;
-  was_archived := p.is_archived = 1;
 
   if act = 'detail' then
     return research.ok(jsonb_build_object('proposal', research.proposal_json(p)));
@@ -234,27 +247,53 @@ begin
     return research.ok(jsonb_build_object('items', (
       select coalesce(jsonb_agg(to_jsonb(h) || jsonb_build_object('actor_name', x.name, 'actor_role', x.role) order by h.id desc), '[]')
       from research.proposal_history h left join research.users x on x.id = h.actor_id where h.proposal_id = pid)));
-  elsif act = 'assignments' then
-    return research.ok(jsonb_build_object('items', (
-      select coalesce(jsonb_agg(to_jsonb(a) || jsonb_build_object('evaluator_name', x.name) order by a.id desc), '[]')
-      from research.evaluation_assignments a join research.users x on x.id = a.evaluator_id
-      where a.proposal_id = pid and (u.role <> 'evaluator' or (a.evaluator_id = u.id and a.is_active = 1)))));
-  end if;
 
-  if was_archived and act <> 'archive' then
-    perform research.fail(409, 'La propuesta está archivada. Coordinación debe desarchivarla para continuar.');
-  end if;
+  elsif act = 'update' then
+    -- Corregir y reenviar en un solo paso.
+    if p.author_id <> u.id then perform research.fail(403, 'Solo el autor puede corregir la propuesta.'); end if;
+    if before_s <> 'changes_requested' then perform research.fail(409, 'La propuesta no tiene cambios solicitados.'); end if;
+    update research.proposals set title = research.req_text(d, 'title', 250),
+      description = research.req_text(d, 'description', 65535), objectives = research.req_text(d, 'objectives', 65535),
+      updated_at = now() where id = pid;
+    after_s := coalesce(p.returns_to, case when u.role = 'student' then 'pending_researcher_review' else 'pending_coordinator' end);
+    -- Si el estudiante eligió mal al investigador, lo corrige aquí; el nuevo investigador la revisa desde el inicio.
+    if u.role = 'student' and research.has(d, 'responsible_researcher_id') then
+      researcher := research.req_id(d, 'responsible_researcher_id');
+      if researcher <> p.responsible_researcher_id then
+        perform research.active_role(researcher, 'researcher');
+        after_s := 'pending_researcher_review';
+        update research.proposals set responsible_researcher_id = researcher where id = pid;
+        obs := 'Nuevo investigador responsable: ' || (select name from research.users where id = researcher) || '. ';
+      end if;
+    end if;
+    update research.proposals set returns_to = null where id = pid;
+    obs := coalesce(obs, '') || case when after_s = 'pending_coordinator' then 'Corregida y reenviada a Coordinación.' else 'Corregida y reenviada al investigador responsable.' end;
+    log_action := 'resubmit';
 
-  if act = 'submit' then
-    if module <> 'evaluations' or u.role <> 'evaluator' then perform research.fail(403, 'Solo el evaluador asignado puede evaluar.'); end if;
-    if before_s <> 'under_evaluation' then perform research.fail(409, 'La propuesta no está en evaluación.'); end if;
+  elsif act = 'review' then
+    -- Revisa quien tiene la propuesta en su bandeja: el investigador responsable o Coordinación.
+    if before_s = 'pending_researcher_review' then
+      if u.role <> 'researcher' or p.responsible_researcher_id <> u.id then
+        perform research.fail(403, 'Esta propuesta la revisa el investigador responsable.');
+      end if;
+    elsif before_s = 'pending_coordinator' then
+      if u.role <> 'coordinator' then perform research.fail(403, 'Esta propuesta la revisa Coordinación.'); end if;
+    else
+      perform research.fail(409, 'La propuesta no está esperando revisión.');
+    end if;
     decision := research.req_text(d, 'decision', 30);
     if decision not in ('approved', 'changes_requested', 'rejected') then perform research.fail(422, 'Decisión inválida.'); end if;
-    obs := research.req_text(d, 'observations', 65535);
-    insert into research.evaluations (proposal_id, evaluator_id, decision, observations) values (pid, u.id, decision, obs);
-    after_s := case decision when 'approved' then 'approved' when 'changes_requested' then 'changes_requested_evaluator' else 'rejected' end;
-    if decision = 'approved' then
-      -- La propuesta aprobada se convierte directamente en proyecto (diagramas 1 y 3).
+    obs := case when decision = 'approved' then research.opt_text(d, 'observations', 65535)
+                else research.req_text(d, 'observations', 65535) end;
+    after_s := case decision
+      when 'approved' then case when before_s = 'pending_researcher_review' then 'pending_coordinator' else 'approved' end
+      when 'changes_requested' then 'changes_requested' else 'rejected' end;
+    if decision = 'changes_requested' then update research.proposals set returns_to = before_s where id = pid; end if;
+    if after_s = 'approved' then
+      -- La propuesta aprobada por Coordinación se convierte en proyecto.
+      if not exists (select 1 from research.users where id = p.responsible_researcher_id and role = 'researcher' and status = 'active') then
+        perform research.fail(409, 'El investigador responsable ya no está activo. Solicita cambios para que el autor elija otro, o reactiva su cuenta.');
+      end if;
       insert into research.projects (proposal_id, title, description, objectives, responsible_researcher_id)
         values (pid, p.title, p.description, p.objectives, p.responsible_researcher_id) returning id into new_project;
       perform research.event_project(new_project, u.id, 'project', new_project, 'created_from_proposal', jsonb_build_object('proposal_id', pid));
@@ -263,60 +302,30 @@ begin
         from (select distinct unnest(array[p.responsible_researcher_id, p.author_id]) as x) s
         on conflict (project_id, user_id) do nothing;
     end if;
-    log_action := 'evaluation_' || decision;
-  elsif act in ('update', 'resubmit') then
-    if p.author_id <> u.id then perform research.fail(403, 'Solo el autor puede corregir la propuesta.'); end if;
-    if before_s not in ('changes_requested_researcher', 'changes_requested_evaluator') then
-      perform research.fail(409, 'La propuesta no tiene cambios solicitados.');
-    end if;
-    if act = 'update' then
-      if d ? 'title' then update research.proposals set title = research.req_text(d, 'title', 250) where id = pid; changed := changed + 1; end if;
-      if d ? 'description' then update research.proposals set description = research.req_text(d, 'description', 65535) where id = pid; changed := changed + 1; end if;
-      if d ? 'objectives' then update research.proposals set objectives = research.req_text(d, 'objectives', 65535) where id = pid; changed := changed + 1; end if;
-      if changed = 0 then perform research.fail(422, 'Envía al menos un campo para corregir.'); end if;
-      update research.proposals set correction_pending_resubmit = 1, updated_at = now() where id = pid;
-    else
-      if p.correction_pending_resubmit <> 1 then perform research.fail(409, 'Guarda primero las correcciones y después reenvía.'); end if;
-      after_s := case when before_s = 'changes_requested_researcher' then 'pending_researcher_review' else 'under_evaluation' end;
-      update research.proposals set correction_pending_resubmit = 0 where id = pid;
-      obs := case when after_s = 'under_evaluation' then 'Reenviada al evaluador asignado.' else 'Reenviada al investigador responsable.' end;
-    end if;
-  elsif act = 'review' then
-    if u.role <> 'researcher' or p.responsible_researcher_id <> u.id or p.author_id = u.id then
-      perform research.fail(403, 'Solo el investigador responsable puede revisar esta propuesta.');
-    end if;
-    if before_s <> 'pending_researcher_review' then perform research.fail(409, 'La revisión del investigador no está pendiente.'); end if;
-    decision := research.req_text(d, 'decision', 30);
-    if decision not in ('approved', 'changes_requested', 'rejected') then perform research.fail(422, 'Decisión inválida.'); end if;
-    obs := research.req_text(d, 'observations', 65535);
-    after_s := case decision when 'approved' then 'pending_coordinator' when 'changes_requested' then 'changes_requested_researcher' else 'rejected' end;
-    insert into research.proposal_reviews (proposal_id, researcher_id, decision, observations) values (pid, u.id, decision, obs);
     log_action := 'review_' || decision;
-  elsif act = 'archive' then
-    if u.role <> 'coordinator' then perform research.fail(403, 'Solo Coordinación archiva propuestas.'); end if;
-    v_archive := research.req_bool(d, 'archived');
-    if v_archive = was_archived then
-      return research.ok(jsonb_build_object('proposal_id', pid, 'status', before_s));
+
+  elsif act = 'cancel' then
+    -- Error humano típico: se envió una propuesta por equivocación o ya no se hará.
+    if not (p.author_id = u.id or u.role = 'coordinator') then perform research.fail(403, 'Solo el autor o Coordinación pueden cancelar la propuesta.'); end if;
+    if before_s in ('approved', 'rejected', 'cancelled') then
+      perform research.fail(409, case before_s when 'approved' then 'La propuesta ya es un proyecto; cancela el proyecto si ya no se realizará.'
+        when 'cancelled' then 'La propuesta ya está cancelada.' else 'La propuesta ya fue rechazada.' end);
     end if;
-    if v_archive then
-      update research.proposals set is_archived = 1, status_before_archive = before_s where id = pid;
-      log_action := 'archived';
-      obs := research.opt_text(d, 'observations', 2000);
-    else
-      after_s := coalesce(p.status_before_archive, before_s);
-      update research.proposals set is_archived = 0, status_before_archive = null where id = pid;
-      log_action := 'unarchived';
-    end if;
-  elsif act = 'assign' then
-    if u.role <> 'coordinator' then perform research.fail(403, 'Solo Coordinación asigna evaluadores.'); end if;
-    if before_s <> 'pending_coordinator' then perform research.fail(409, 'La propuesta no está pendiente de Coordinación.'); end if;
-    evaluator := research.req_id(d, 'evaluator_id');
-    perform research.active_role(evaluator, 'evaluator');
-    if evaluator = p.author_id then perform research.fail(422, 'El evaluador no puede ser el autor de la propuesta.'); end if;
-    update research.evaluation_assignments set is_active = 0 where proposal_id = pid and is_active = 1;
-    insert into research.evaluation_assignments (proposal_id, evaluator_id, assigned_by) values (pid, evaluator, u.id);
-    after_s := 'under_evaluation';
-    obs := 'Evaluador: ' || (select name from research.users where id = evaluator);
+    obs := research.req_text(d, 'reason', 2000);
+    after_s := 'cancelled';
+    update research.proposals set status_before_cancel = before_s where id = pid;
+    log_action := 'cancelled';
+
+  elsif act = 'reactivate' then
+    -- Deshace una cancelación hecha por error: vuelve exactamente a donde estaba.
+    if not (p.author_id = u.id or u.role = 'coordinator') then perform research.fail(403, 'Solo el autor o Coordinación pueden reactivar la propuesta.'); end if;
+    if before_s <> 'cancelled' then perform research.fail(409, 'La propuesta no está cancelada.'); end if;
+    after_s := coalesce(p.status_before_cancel, case when (select role from research.users where id = p.author_id) = 'student'
+                                                       then 'pending_researcher_review' else 'pending_coordinator' end);
+    if after_s = 'pending_researcher_review' then perform research.active_role(p.responsible_researcher_id, 'researcher'); end if;
+    update research.proposals set status_before_cancel = null where id = pid;
+    obs := 'Reactivada.';
+    log_action := 'reactivated';
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;
@@ -327,51 +336,52 @@ begin
 end $$;
 
 -- ------------------------------------------------------------------
--- Tablero: contadores y "pendientes para ti" según el rol.
+-- Tablero: lo que cada persona tiene que hacer, sin buscarlo en el menú.
 -- ------------------------------------------------------------------
+create or replace function research.activity_brief(a research.activities)
+returns jsonb language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select jsonb_build_object('id', a.id, 'description', a.description, 'status', a.status, 'deadline', a.deadline,
+    'deadline_status', research.deadline_status(a.status, a.deadline), 'project_id', a.project_id,
+    'project_title', (select title from research.projects where id = a.project_id),
+    'participant_name', (select name from research.users where id = a.participant_id));
+$$;
+
 create or replace function research.ep_dashboard(u research.users)
 returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
-declare projects jsonb; todo jsonb := '[]'::jsonb; n integer;
+declare todo jsonb := '[]'::jsonb; stats jsonb; n integer; mine jsonb := '[]'; review jsonb := '[]';
 begin
-  projects := research.project_list(u);
-
-  if u.role = 'student' or u.role = 'researcher' then
-    select count(*) into n from research.proposals where author_id = u.id and is_archived = 0
-      and status in ('changes_requested_researcher', 'changes_requested_evaluator');
-    if n > 0 then todo := todo || jsonb_build_object('label', 'Propuestas con cambios solicitados', 'count', n, 'link', 'proposals'); end if;
-    select count(*) into n from research.activities a join research.projects p on p.id = a.project_id
-      where a.participant_id = u.id and a.status in ('pending', 'in_progress') and p.status = 'active';
-    if n > 0 then todo := todo || jsonb_build_object('label', 'Mis actividades por realizar', 'count', n, 'link', 'activities'); end if;
+  if u.role in ('student', 'researcher') then
+    select count(*) into n from research.proposals where author_id = u.id and status = 'changes_requested';
+    if n > 0 then todo := todo || jsonb_build_object('label', 'Propuestas que debes corregir', 'count', n, 'link', 'proposals', 'filter', 'changes_requested', 'tone', 'changes'); end if;
+    select coalesce(jsonb_agg(research.activity_brief(a) order by a.deadline), '[]') into mine
+      from research.activities a join research.projects p on p.id = a.project_id
+      where a.participant_id = u.id and a.status in ('pending', 'changes', 'in_review') and p.status in ('active', 'changes');
   end if;
   if u.role = 'researcher' then
-    select count(*) into n from research.proposals where responsible_researcher_id = u.id and author_id <> u.id
-      and status = 'pending_researcher_review' and is_archived = 0;
-    if n > 0 then todo := todo || jsonb_build_object('label', 'Propuestas de estudiantes por revisar', 'count', n, 'link', 'proposals'); end if;
-    select count(*) into n from research.activities a join research.projects p on p.id = a.project_id
-      where p.responsible_researcher_id = u.id and a.status = 'in_review' and p.status = 'active';
-    if n > 0 then todo := todo || jsonb_build_object('label', 'Actividades entregadas por revisar', 'count', n, 'link', 'activities'); end if;
+    select count(*) into n from research.proposals where responsible_researcher_id = u.id and author_id <> u.id and status = 'pending_researcher_review';
+    if n > 0 then todo := todo || jsonb_build_object('label', 'Propuestas de estudiantes por revisar', 'count', n, 'link', 'proposals', 'filter', 'pending_researcher_review', 'tone', 'progress'); end if;
+    select count(*) into n from research.projects where responsible_researcher_id = u.id and status = 'changes';
+    if n > 0 then todo := todo || jsonb_build_object('label', 'Proyectos con cambios pedidos por Coordinación', 'count', n, 'link', 'projects', 'filter', 'changes', 'tone', 'changes'); end if;
+    select coalesce(jsonb_agg(research.activity_brief(a) order by a.updated_at), '[]') into review
+      from research.activities a join research.projects p on p.id = a.project_id
+      where p.responsible_researcher_id = u.id and a.status = 'in_review' and p.status in ('active', 'changes');
   end if;
   if u.role = 'coordinator' then
-    select count(*) into n from research.proposals where status = 'pending_coordinator' and is_archived = 0;
-    if n > 0 then todo := todo || jsonb_build_object('label', 'Propuestas por asignar evaluador', 'count', n, 'link', 'proposals'); end if;
-    select count(*) into n from research.closures where status = 'pending';
-    if n > 0 then todo := todo || jsonb_build_object('label', 'Solicitudes de cierre por revisar', 'count', n, 'link', 'closures'); end if;
-  end if;
-  if u.role = 'evaluator' then
-    select count(*) into n from research.evaluation_assignments a join research.proposals p on p.id = a.proposal_id
-      where a.evaluator_id = u.id and a.is_active = 1 and p.status = 'under_evaluation' and p.is_archived = 0;
-    if n > 0 then todo := todo || jsonb_build_object('label', 'Propuestas por evaluar', 'count', n, 'link', 'evaluations'); end if;
+    select count(*) into n from research.proposals where status = 'pending_coordinator';
+    if n > 0 then todo := todo || jsonb_build_object('label', 'Propuestas esperando tu decisión', 'count', n, 'link', 'proposals', 'filter', 'pending_coordinator', 'tone', 'progress'); end if;
+    select count(*) into n from research.projects where status = 'closing';
+    if n > 0 then todo := todo || jsonb_build_object('label', 'Solicitudes de cierre por revisar', 'count', n, 'link', 'projects', 'filter', 'closing', 'tone', 'progress'); end if;
   end if;
 
-  return research.ok(jsonb_build_object(
-    'counts', jsonb_build_array(
-      (select count(*) from research.proposals x where research.proposal_visible(u, x)),
-      (select count(*) from jsonb_array_elements(projects) e where e ->> 'status' = 'active'),
-      case when u.role = 'student'
-        then (select count(*) from research.activities a where a.participant_id = u.id and a.status <> 'completed')
-        else (select coalesce(sum((e ->> 'total_activities')::int - (e ->> 'completed_activities')::int), 0) from jsonb_array_elements(projects) e) end,
-      jsonb_array_length(projects)),
-    'projects', projects,
-    'todo', todo));
+  stats := jsonb_build_array(
+    jsonb_build_object('label', 'Proyectos en curso', 'link', 'projects', 'filter', 'open', 'value',
+      (select count(*) from research.projects p where p.status in ('active', 'changes', 'closing') and research.project_visible(u, p.id))),
+    jsonb_build_object('label', 'Proyectos completados', 'link', 'projects', 'filter', 'finalized', 'value',
+      (select count(*) from research.projects p where p.status = 'finalized' and research.project_visible(u, p.id))),
+    jsonb_build_object('label', 'Propuestas en revisión', 'link', 'proposals', 'filter', 'in_review', 'value',
+      (select count(*) from research.proposals x where x.status in ('pending_researcher_review', 'pending_coordinator') and research.proposal_visible(u, x))));
+
+  return research.ok(jsonb_build_object('stats', stats, 'todo', todo, 'my_activities', mine, 'to_review', review));
 end $$;

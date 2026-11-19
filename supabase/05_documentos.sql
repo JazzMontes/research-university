@@ -1,5 +1,6 @@
 -- =====================================================================
--- URPMP · 05 · Documentos del proyecto, evidencias y fuentes institucionales
+-- URPMP · 05 · Documentos del proyecto, evidencias y fuentes institucionales (versión 3)
+-- Eliminar: quien lo subió o el investigador responsable (ya no existe el "bloqueo").
 -- Los archivos se guardan dentro de la base (máx. 5 MB) y su texto se divide
 -- en fragmentos indexados para el asistente de IA.
 -- =====================================================================
@@ -190,8 +191,8 @@ begin
       if module = 'evidence' then
         aid := research.req_id(d, 'activity_id');
         select * into a from research.activities where id = aid and project_id = pid for update;
-        if a.id is null or a.participant_id <> u.id or a.status not in ('pending', 'in_progress') then
-          perform research.fail(403, 'Solo el responsable de la actividad adjunta evidencias antes de enviarla a revisión.');
+        if a.id is null or a.participant_id <> u.id or a.status not in ('pending', 'changes', 'in_review') then
+          perform research.fail(403, 'Solo la persona asignada adjunta evidencias, y solo mientras la actividad no esté cerrada.');
         end if;
         v_title := coalesce(nullif(research.opt_text(d, 'description', 250), ''), research.req_text(d, 'filename', 250));
       else
@@ -203,7 +204,6 @@ begin
     else
       did := dd.id;
       if dd.kind = 'evidence' then perform research.fail(409, 'Las evidencias se conservan tal como se entregaron; adjunta una nueva.'); end if;
-      if dd.blocked = 1 and u.role = 'student' then perform research.fail(403, 'El documento está bloqueado por el investigador responsable.'); end if;
       if research.has(d, 'title') then update research.documents set title = research.req_text(d, 'title', 250) where id = did; end if;
     end if;
     if act = 'update' and not research.has(d, 'file_base64') then
@@ -213,16 +213,22 @@ begin
     end if;
   elsif act = 'delete' then
     did := dd.id;
-    if dd.kind = 'evidence' then perform research.fail(409, 'Las evidencias se conservan como historial.'); end if;
-    if not institutional and dd.blocked = 1 and u.role = 'student' then perform research.fail(403, 'El documento está bloqueado por el investigador responsable.'); end if;
+    if dd.kind = 'evidence' then
+      -- Quien adjuntó una evidencia equivocada la puede quitar mientras la actividad no se acepte.
+      select * into a from research.activities where id = dd.activity_id;
+      if coalesce(dd.created_by, 0) <> u.id then perform research.fail(403, 'Solo quien adjuntó la evidencia puede quitarla.'); end if;
+      if a.status in ('completed', 'cancelled') then perform research.fail(409, 'La actividad ya está cerrada; sus evidencias se conservan.'); end if;
+    elsif not institutional and coalesce(dd.created_by, 0) <> u.id and p.responsible_researcher_id <> u.id then
+      perform research.fail(403, 'Solo quien subió el documento o el investigador responsable pueden eliminarlo.');
+    end if;
     update research.documents set deleted_at = now() where id = did;
     delete from research.document_chunks where document_id = did;
-  elsif act in ('set-block', 'set-restriction') and not institutional then
+  elsif act = 'set-restriction' and not institutional then
+    -- "Solo investigadores": los estudiantes del proyecto no lo ven.
     perform research.project_lead(p, u);
     did := dd.id;
-    v_flag := research.req_bool(d, case when act = 'set-block' then 'blocked' else 'restricted' end);
-    if act = 'set-block' then update research.documents set blocked = v_flag::int where id = did;
-    else update research.documents set restricted = v_flag::int where id = did; end if;
+    v_flag := research.req_bool(d, 'restricted');
+    update research.documents set restricted = v_flag::int where id = did;
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;

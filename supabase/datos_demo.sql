@@ -10,8 +10,7 @@ from (values
   ('Coordinación (demo)', 'demo.coordinacion', 'coordinator'),
   ('Ana López (estudiante demo)', 'demo.estudiante', 'student'),
   ('Rodrigo Pérez (investigador demo)', 'demo.investigador', 'researcher'),
-  ('Laura Ruiz (investigadora demo)', 'demo.investigadora', 'researcher'),
-  ('Eva Torres (evaluadora demo)', 'demo.evaluador', 'evaluator')
+  ('Laura Ruiz (investigadora demo)', 'demo.investigadora', 'researcher')
 ) as v(name, username, role)
 where not exists (select 1 from research.users u where lower(u.username) = v.username);
 

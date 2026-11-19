@@ -25,6 +25,9 @@ returns text language sql immutable as $$
     when 'status' then 'Estado' when 'deadline' then 'Fecha límite' when 'target_date' then 'Fecha objetivo'
     when 'start_date' then 'Fecha de inicio' when 'end_date' then 'Fecha de término'
     when 'filename' then 'Archivo' when 'question' then 'Pregunta' when 'project_role' then 'Rol en el proyecto'
+    when 'reason' then 'Motivo' when 'comment' then 'Comentario' when 'email' then 'Correo'
+    when 'responsible_researcher_id' then 'Investigador responsable' when 'participant_id' then 'Responsable'
+    when 'user_id' then 'Persona' when 'researcher_id' then 'Nuevo investigador' when 'reassign_to' then 'Quién recibe sus actividades'
     else null end, field);
 $$;
 
@@ -70,7 +73,7 @@ declare v text;
 begin
   v := btrim(coalesce(d ->> field, ''));
   if v !~ '^[0-9]{1,9}$' or v::bigint < 1 then
-    perform research.fail(422, 'Identificador inválido: ' || field || '.');
+    perform research.fail(422, 'Selecciona un valor válido en ' || research.field_label(field) || '.');
   end if;
   return v::integer;
 end $$;
@@ -150,7 +153,7 @@ $$;
 create or replace function research.role_label(r text)
 returns text language sql immutable as $$
   select case r when 'student' then 'Estudiante' when 'researcher' then 'Investigador'
-    when 'evaluator' then 'Evaluador' when 'coordinator' then 'Coordinador' else r end;
+    when 'coordinator' then 'Coordinador' else r end;
 $$;
 
 -- ------------------------------------------------------------------
@@ -221,8 +224,6 @@ returns boolean language sql stable
 set search_path = research, extensions, pg_temp as $$
   select case u.role
     when 'coordinator' then true
-    when 'evaluator' then exists (select 1 from research.evaluation_assignments a
-                                  where a.proposal_id = p.id and a.evaluator_id = u.id and a.is_active = 1)
     else p.author_id = u.id
       or (u.role = 'researcher' and p.responsible_researcher_id = u.id)
       or exists (select 1 from research.projects pr where pr.proposal_id = p.id
@@ -236,7 +237,6 @@ returns boolean language sql stable
 set search_path = research, extensions, pg_temp as $$
   select case
     when u.role = 'coordinator' then exists (select 1 from research.projects where id = pid)
-    when u.role = 'evaluator' then false
     else exists (select 1 from research.projects p where p.id = pid and
            (p.responsible_researcher_id = u.id or exists (
               select 1 from research.participants t where t.project_id = p.id and t.user_id = u.id and t.is_active = 1)))
@@ -269,9 +269,12 @@ create or replace function research.project_active(p research.projects)
 returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
 begin
-  if p.status <> 'active' then
-    perform research.fail(409, case p.status when 'closing' then 'El proyecto tiene una solicitud de cierre pendiente; no se puede modificar.'
-                                             else 'El proyecto está finalizado; ya no se puede modificar.' end);
+  -- "En proceso" y "En cambios" se pueden trabajar; los demás estados son de solo lectura.
+  if p.status not in ('active', 'changes') then
+    perform research.fail(409, case p.status
+      when 'closing' then 'El proyecto tiene una solicitud de cierre pendiente; espera la respuesta de Coordinación.'
+      when 'cancelled' then 'El proyecto está cancelado; solo Coordinación puede reabrirlo.'
+      else 'El proyecto está completado; solo Coordinación puede reabrirlo.' end);
   end if;
 end $$;
 
@@ -304,25 +307,35 @@ $$;
 create or replace function research.deadline_status(st text, deadline date)
 returns text language sql stable as $$
   select case when st = 'completed' then 'Completada'
+              when st = 'cancelled' then 'Cancelada'
               when deadline < current_date then 'Retrasada'
               when deadline <= current_date + 3 then 'Próxima a vencer'
               else 'Normal' end;
 $$;
 
--- Resumen de un proyecto (para listas, seguimiento y reportes).
+-- Un hito se alcanza solo: cuando todas sus actividades (no canceladas) están completadas.
+create or replace function research.milestone_status(mid integer)
+returns text language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select case when count(*) > 0 and count(*) filter (where a.status <> 'completed') = 0 then 'achieved' else 'pending' end
+  from research.milestone_activities ma join research.activities a on a.id = ma.activity_id
+  where ma.milestone_id = mid and a.status <> 'cancelled';
+$$;
+
+-- Resumen de un proyecto (para listas, seguimiento y reportes). Las actividades canceladas no cuentan.
 create or replace function research.project_json(p research.projects)
 returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
   select to_jsonb(p) || jsonb_build_object(
     'researcher_name', (select name from research.users where id = p.responsible_researcher_id),
     'proposal_title', (select title from research.proposals where id = p.proposal_id),
-    'total_activities', (select count(*) from research.activities a where a.project_id = p.id),
+    'total_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status <> 'cancelled'),
     'completed_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status = 'completed'),
-    'overdue_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status <> 'completed' and a.deadline < current_date),
+    'overdue_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status not in ('completed','cancelled') and a.deadline < current_date),
     'total_milestones', (select count(*) from research.milestones m where m.project_id = p.id),
-    'achieved_milestones', (select count(*) from research.milestones m where m.project_id = p.id and m.status = 'achieved'),
+    'achieved_milestones', (select count(*) from research.milestones m where m.project_id = p.id and research.milestone_status(m.id) = 'achieved'),
     'next_milestone', (select jsonb_build_object('description', m.description, 'target_date', m.target_date)
-                       from research.milestones m where m.project_id = p.id and m.status = 'pending'
+                       from research.milestones m where m.project_id = p.id and research.milestone_status(m.id) = 'pending'
                        order by m.target_date limit 1),
     'active_participants', (select count(*) from research.participants t where t.project_id = p.id and t.is_active = 1)
   );
@@ -333,5 +346,5 @@ returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
   select coalesce(jsonb_agg(research.project_json(p) order by p.id desc), '[]'::jsonb)
   from research.projects p
-  where u.role <> 'evaluator' and research.project_visible(u, p.id);
+  where research.project_visible(u, p.id);
 $$;

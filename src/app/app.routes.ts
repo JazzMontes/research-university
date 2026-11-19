@@ -8,7 +8,6 @@ export const routes: Routes = [
   { path: 'login', loadComponent: platform },
   { path: 'app/:section/:id', loadComponent: platform, canActivate: [authGuard], runGuardsAndResolvers: 'always' },
   { path: 'app/:section', loadComponent: platform, canActivate: [authGuard], runGuardsAndResolvers: 'always' },
-  { path: 'home', redirectTo: 'app/dashboard', pathMatch: 'full' },
   { path: '', redirectTo: 'login', pathMatch: 'full' },
   { path: '**', redirectTo: 'login' },
 ];

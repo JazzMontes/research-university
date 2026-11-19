@@ -5,7 +5,7 @@
  */
 import { Injectable, signal } from '@angular/core';
 import { Router } from '@angular/router';
-import { Role, VIEWS } from '../platform/view-config';
+import { Role, sectionAllowed } from '../platform/ui-config';
 import { BackendResult, BackendService } from '../services/backend.service';
 
 export interface AuthUser {
@@ -176,9 +176,8 @@ export class AuthService {
       if (!user) {
         await this.router.navigate(['/login'], { replaceUrl: true });
       } else if (user.role !== previousRole && this.router.url.startsWith('/app/')) {
-        const section = this.router.url.split('/')[2]?.split('?')[0];
-        const view = VIEWS.find(item => item.key === section);
-        if (view && !view.roles.includes(user.role)) {
+        const section = this.router.url.split('/')[2]?.split('?')[0] || 'dashboard';
+        if (!sectionAllowed(section, user.role)) {
           await this.router.navigate(['/app/dashboard'], { queryParams: { denied: '1' }, replaceUrl: true });
         }
       }
@@ -195,7 +194,7 @@ export class AuthService {
 
   private validateUser(response: SessionResponse): AuthUser {
     const user = response?.user;
-    const roles = ['student', 'researcher', 'evaluator', 'coordinator'];
+    const roles = ['student', 'researcher', 'coordinator'];
     if (!user || !Number.isInteger(user.id) || user.id <= 0 ||
         typeof user.name !== 'string' || typeof user.username !== 'string' ||
         user.status !== 'active' || !roles.includes(user.role)) {

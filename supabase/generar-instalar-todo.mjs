@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const dir = fileURLToPath(new URL('.', import.meta.url));
 const partes = readdirSync(dir).filter((f) => /^0[1-7]_.*\.sql$/.test(f)).sort();
 const cabecera = `-- =====================================================================
--- URPMP · INSTALACIÓN COMPLETA PARA SUPABASE (versión 2)
+-- URPMP · INSTALACIÓN COMPLETA PARA SUPABASE (versión 3)
 -- Copia TODO este archivo en Supabase → SQL Editor → New query → Run.
 -- Se puede volver a ejecutar para actualizar: NO borra datos.
 -- Generado a partir de: ${partes.join(', ')}

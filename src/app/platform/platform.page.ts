@@ -1,19 +1,54 @@
-/* Conecta el acceso con el backend (Supabase o PHP) y muestra las vistas disponibles para el rol autenticado. */
+/*
+ * Plataforma URPMP (versión 3, sin evaluador).
+ * Secciones: Inicio · Propuestas · Proyectos (el proyecto concentra equipo, actividades,
+ * hitos, documentos, cierre y reporte) · Usuarios · Fuentes institucionales · Asistente.
+ * Todas las acciones pasan por un único diálogo que valida, confirma lo irreversible
+ * y explica qué va a pasar antes de guardar.
+ */
 import { ChangeDetectorRef, Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule, NgForm } from '@angular/forms';
+import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { IonicModule } from '@ionic/angular';
-import { Action, DemoRow, Field, Role, VIEWS, View } from './view-config';
+import {
+  PROJECT_FILTERS, ROLE_LABELS, Role, SECTIONS, Section, StatusKind, StatusInfo, proposalFilters, statusInfo,
+} from './ui-config';
 import { ApiService } from '../services/api.service';
 import { BackendService } from '../services/backend.service';
 import { extractOfficeText } from '../services/file-text';
 import { AuthService } from '../auth/auth.service';
 
-import { Account, UsersService } from '../services/users.service';
-import { HistoryEntry, Proposal, ProposalsService } from '../services/proposals.service';
-import { CatalogsService } from '../services/catalogs.service';
-import { Assignment, AssignmentSummary, EvaluationsService } from '../services/evaluations.service';
+// Los datos llegan como JSON del servidor; se tratan como objetos libres para leerlos igual en código y plantilla.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Row = any;
+interface Option { value: string; label: string; }
+
+export type FieldType = 'text' | 'textarea' | 'date' | 'email' | 'password' | 'select' | 'choice' | 'checks' | 'file';
+export interface DialogField {
+  key: string;
+  label: string;
+  type: FieldType;
+  required?: boolean;
+  /** Obligatorio solo en ciertos casos (p. ej. observaciones al pedir cambios). */
+  requiredWhen?: (values: Row) => boolean;
+  options?: Option[];
+  hint?: string;
+  min?: string;
+}
+export interface Dialog {
+  title: string;
+  intro?: string;
+  /** Texto en rojo que explica lo que no se puede deshacer fácilmente. */
+  warning?: string;
+  danger?: boolean;
+  confirmLabel: string;
+  fields: DialogField[];
+  values: Row;
+  /** Devuelve el mensaje de éxito que se muestra al cerrar. */
+  submit: (values: Row, file?: File) => Promise<string>;
+}
+
+const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,72}$/;
 
 @Component({
   selector: 'app-platform',
@@ -23,620 +58,992 @@ import { Assignment, AssignmentSummary, EvaluationsService } from '../services/e
   styleUrls: ['./platform.page.scss'],
 })
 export class PlatformPage implements OnInit {
+  // ---------- sesión y navegación ----------
+  section = 'dashboard';
+  recordId = 0;
+  menuOpen = false;
+  loading = false;
+  loadError = '';
+  notice = '';
+  noticeTone: 'ok' | 'error' = 'ok';
+  private revision = 0;
+  private entered = false;
+
+  username = '';
+  password = '';
+  showLoginPassword = false;
+  loginBusy = false;
+  loginError = '';
+  logoutBusy = false;
+
+  // ---------- datos por sección ----------
+  dash: Row = {};
+  proposals: Row[] = [];
+  proposalTotal = 0;
+  page = 1;
+  search = '';
+  filter = '';
+  proposal?: Row;
+  proposalHistory: Row[] = [];
+
+  projects: Row[] = [];
+  project?: Row;
+  tab = 'Resumen';
+  readonly tabs = ['Resumen', 'Equipo', 'Actividades', 'Hitos', 'Documentos', 'Historial'];
+  activities: Row[] = [];
+  milestones: Row[] = [];
+  documents: Row[] = [];
+  history: Row[] = [];
+  versionsOf = 0;
+  versions: Row[] = [];
+
+  activity?: Row;
+  evidence: Row[] = [];
+
+  users: Row[] = [];
+  userFilter = 'active';
+  sources: Row[] = [];
+
+  question = '';
+  assistantMode = 'ask';
+  messages: { author: string; text: string }[] = [];
+  asking = false;
+
+  // ---------- diálogo único ----------
+  dialog?: Dialog;
+  dialogError = '';
+  dialogFile?: File;
+  saving = false;
+  shown: Record<string, boolean> = {};
+
+  readonly projectFilters = PROJECT_FILTERS;
+  readonly todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+  constructor(private route: ActivatedRoute, private router: Router, public auth: AuthService,
+    private api: ApiService, private backend: BackendService, private changeDetector: ChangeDetectorRef) {}
+
+  // =====================================================================
+  // Datos de la sesión
+  // =====================================================================
+  get me(): number { return this.auth.user()?.id ?? 0; }
   get role(): Role | null { return this.auth.user()?.role ?? null; }
   get userName(): string { return this.auth.user()?.name || ''; }
   get firstName(): string { return this.userName.trim().split(/\s+/)[0] || ''; }
   get initials(): string { return this.userName.trim().split(/\s+/).slice(0, 2).map(part => part[0] || '').join('').toUpperCase(); }
+  get roleLabel(): string { return this.role ? ROLE_LABELS[this.role] : ''; }
   get today(): string { return new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }); }
-  loginBusy = false;
-  logoutBusy = false;
-  loginError = '';
-  roles: { value: Role; label: string }[] = [
-    { value: 'student', label: 'Estudiante' },
-    { value: 'researcher', label: 'Investigador' },
-    { value: 'evaluator', label: 'Evaluador' },
-    { value: 'coordinator', label: 'Coordinador' },
-  ];
-  views = VIEWS;
-  section = 'dashboard';
-  selected?: DemoRow;
-  search = '';
-  status = 'Todos';
-  tab = 'Información';
-  projectId = '1';
-  menuOpen = false;
-  action?: Action;
-  values: Record<string, string> = {};
-  formError = '';
-  notice = '';
-  question = '';
-  assistantAction = 'ask';
-  messages: { author: string; text: string }[] = [];
-  username = '';
-  password = '';
+  get menu(): Section[] { return SECTIONS.filter(item => item.menu && this.role !== null && item.roles.includes(this.role)); }
+  get sectionTitle(): string { return SECTIONS.find(item => item.key === this.section)?.title || 'Inicio'; }
+  get proposalFilterList(): Option[] { return proposalFilters(this.role); }
 
-  liveRows: DemoRow[] = [];
-  proposal?: Proposal;
-  account?: Account;
-  history: HistoryEntry[] = [];
-  assignments: Assignment[] = [];
-  assignmentList: AssignmentSummary[] = [];
-  researchers: {value: string; label: string}[] = [];
-  evaluators: {value: string; label: string}[] = [];
-  loading = false;
-  saving = false;
-  loadError = '';
-  page = 1;
-  total = 0;
-  archived = '0';
-  private revision = 0;
-  readonly historyLabels: Record<string, string> = {
-    created: 'Propuesta registrada', update: 'Correcciones guardadas', resubmit: 'Propuesta reenviada',
-    review_approved: 'Revisión preliminar aprobada', review_changes_requested: 'Cambios solicitados',
-    review_rejected: 'Revisión preliminar rechazada', assign: 'Evaluador asignado',
-    archived: 'Propuesta archivada', unarchived: 'Propuesta desarchivada',
-    evaluation_approved: 'Evaluación: aprobada', evaluation_changes_requested: 'Evaluación: cambios solicitados',
-    evaluation_rejected: 'Evaluación: rechazada',
-  };
-  get latestReview(): HistoryEntry | undefined {
-    return this.history.find(event => event.action.startsWith('review_'));
+  status(kind: StatusKind, value: unknown): StatusInfo { return statusInfo(kind, value); }
+  roleName(role: unknown): string { return ROLE_LABELS[role as Role] || String(role ?? ''); }
+  date(value: unknown): string {
+    if (!value) return 'Sin definir';
+    const text = String(value);
+    const parsed = new Date(text.length === 10 ? text + 'T12:00:00' : text);
+    return isNaN(parsed.getTime()) ? text : parsed.toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
   }
-  readonly proposalStatuses: Record<string, string> = {
-    pending_researcher_review: 'En revisión del investigador',
-    pending_coordinator: 'Pendiente de coordinación',
-    under_evaluation: 'En evaluación',
-    changes_requested_researcher: 'Cambios solicitados por el investigador',
-    changes_requested_evaluator: 'Cambios solicitados por el evaluador',
-    rejected: 'Rechazada',
-    approved: 'Aprobada',
-  };
-
-  get live(): boolean { return this.section !== 'login' && this.section !== 'assistant'; }
-
-  private proposalRow(p: Proposal): DemoRow {
-    return { id: Number(p.id), cells: [p.title, p.researcher_name, this.proposalStatuses[p.status] || p.status, p.created_at] };
+  percent(item?: Row): number {
+    const total = Number(item?.['total_activities'] || 0);
+    return total ? Math.round(100 * Number(item?.['completed_activities'] || 0) / total) : 0;
   }
-  private accountRow(u: Account): DemoRow {
-    return { id: Number(u.id), cells: [u.name, u.username, this.roles.find(r => r.value === u.role)?.label || u.role, u.status === 'active' ? 'Activo' : 'Inactivo'] };
+  deadlineTone(label: unknown): string { return label === 'Retrasada' ? 'cancelled' : label === 'Próxima a vencer' ? 'progress' : 'neutral'; }
+
+  // =====================================================================
+  // Ciclo de vida
+  // =====================================================================
+  ngOnInit(): void {
+    this.route.paramMap.subscribe(params => {
+      const query = this.route.snapshot.queryParamMap;
+      this.section = this.route.snapshot.routeConfig?.path === 'login' ? 'login' : (params.get('section') || 'dashboard');
+      this.recordId = Number(params.get('id')) || 0;
+      this.readQuery();
+      this.search = '';
+      this.page = 1;
+      this.menuOpen = false;
+      this.dialog = undefined;
+      this.clearData();
+      this.notice = query.get('denied') === '1' ? 'Tu rol no tiene acceso a esa sección.' : '';
+      this.noticeTone = this.notice ? 'error' : 'ok';
+      if (this.section === 'login') { this.password = ''; void this.skipLoginIfActive(); }
+      else void this.load();
+    });
   }
 
-  async loadLive(page = 1): Promise<void> {
-    const revision = ++this.revision;
-    this.loading = true;
+  // Ionic conserva las páginas visitadas: al volver a una se recargan sus datos.
+  ionViewWillEnter(): void {
+    if (this.entered && this.section !== 'login') { this.readQuery(); void this.load(true); }
+    this.entered = true;
+  }
+
+  /** Filtro (?status=) y pestaña (?tab=) vienen en la dirección para que los enlaces del inicio abran la vista exacta. */
+  private readQuery(): void {
+    const query = this.route.snapshot.queryParamMap;
+    this.filter = query.get('status') || '';
+    const tab = query.get('tab') || '';
+    this.tab = this.tabs.includes(tab) ? tab : 'Resumen';
+  }
+
+  private clearData(): void {
+    ++this.revision;
+    this.loading = false;
     this.loadError = '';
-    this.page = page;
-    const id = Number(this.route.snapshot.paramMap.get('id'));
+    this.proposal = undefined; this.proposalHistory = [];
+    this.project = undefined; this.activities = []; this.milestones = []; this.documents = []; this.history = [];
+    this.versionsOf = 0; this.versions = [];
+    this.activity = undefined; this.evidence = [];
+  }
+
+  private async skipLoginIfActive(): Promise<void> {
     try {
-      if (!['users','proposals','evaluations'].includes(this.section)) {
-        await this.loadResearch(id, revision);
-      } else if (this.section === 'evaluations') {
-        const result = await this.evaluations.list();
-        if (revision !== this.revision) return;
-        this.assignmentList = result.items;
-      } else if (this.section === 'users') {
-        if (id) {
-          const result = await this.users.detail(id);
-          if (revision !== this.revision) return;
-          this.account = result.user;
-          this.selected = this.accountRow(result.user);
-        } else {
-          const result = await this.users.list();
-          if (revision !== this.revision) return;
-          this.liveRows = result.items.map(u => this.accountRow(u));
+      if (this.backend.mode === 'supabase' && !this.backend.token) return;
+      if (await this.auth.checkSession()) await this.router.navigate(['/app/dashboard'], { replaceUrl: true });
+    } catch { /* Se queda en el acceso. */ }
+  }
+
+  /** Carga la sección actual. soft = sin mostrar "Cargando" (después de guardar). */
+  async load(soft = false): Promise<void> {
+    const revision = ++this.revision;
+    const fresh = () => revision === this.revision;
+    if (!soft) this.loading = true;
+    this.loadError = '';
+    try {
+      switch (this.section) {
+        case 'dashboard': {
+          const result = await this.api.request<Row>('dashboard/summary.php');
+          if (fresh()) this.dash = result;
+          break;
         }
-      } else if (id) {
-        const [detail, history, assignments] = await Promise.all([
-          this.proposals.detail(id), this.proposals.history(id), this.evaluations.assignments(id),
-        ]);
-        if (revision !== this.revision) return;
-        this.proposal = detail.proposal;
-        this.selected = this.proposalRow(detail.proposal);
-        this.history = history.items;
-        this.assignments = assignments.items;
-      } else {
-        const result = await this.proposals.list({
-          page, limit: 20, archived: this.archived, search: this.search.trim(),
-          status: this.status === 'Todos' ? '' : this.status,
-        });
-        if (revision !== this.revision) return;
-        this.liveRows = result.items.map(p => this.proposalRow(p));
-        this.total = result.total;
+        case 'proposals':
+          if (this.recordId) {
+            const [detail, history] = await Promise.all([
+              this.api.request<Row>('proposals/detail.php', { proposal_id: this.recordId }),
+              this.api.request<Row>('proposals/history.php', { proposal_id: this.recordId }),
+            ]);
+            if (fresh()) { this.proposal = detail['proposal']; this.proposalHistory = history['items']; }
+          } else {
+            const result = await this.api.request<Row>('proposals/list.php', {
+              page: this.page, limit: 20, search: this.search.trim(), status: this.filter });
+            if (fresh()) { this.proposals = result['items']; this.proposalTotal = result['total']; }
+          }
+          break;
+        case 'projects':
+          if (this.recordId) await this.loadProject(this.recordId, fresh);
+          else {
+            const result = await this.api.request<Row>('projects/list.php');
+            if (fresh()) this.projects = result['items'];
+          }
+          break;
+        case 'activities': {
+          const result = await this.api.request<Row>('activities/detail.php', { activity_id: this.recordId });
+          const item = result['item'];
+          const files = await this.api.request<Row>('evidence/list.php', { project_id: item['project_id'], activity_id: item['id'] });
+          if (fresh()) { this.activity = item; this.evidence = files['items']; }
+          break;
+        }
+        case 'users': {
+          const result = await this.api.request<Row>('users/list.php');
+          if (fresh()) this.users = result['items'];
+          break;
+        }
+        case 'institutional': {
+          const result = await this.api.request<Row>('institutional-documents/list.php');
+          if (fresh()) this.sources = result['items'];
+          break;
+        }
       }
     } catch (error) {
-      if (revision === this.revision) this.loadError = error instanceof Error ? error.message : 'Error de carga.';
+      if (fresh()) this.loadError = this.message(error, 'No se pudo cargar la información.');
     } finally {
-      if (revision === this.revision) {
-        this.loading = false;
-        this.changeDetector.markForCheck();
-      }
+      if (fresh()) { this.loading = false; this.changeDetector.markForCheck(); }
     }
   }
 
-  constructor(private route: ActivatedRoute, private router: Router, public auth: AuthService, private changeDetector: ChangeDetectorRef,
-    private users: UsersService, private proposals: ProposalsService,
-    private catalogs: CatalogsService, private evaluations: EvaluationsService, private api: ApiService,
-    private backend: BackendService) {}
-
-  // Actualiza la vista al cambiar la ruta.
-  ngOnInit(): void {
-    this.route.paramMap.subscribe(params => {
-      this.projectId = this.route.snapshot.queryParamMap.get('project') || this.projectId;
-      this.section = this.route.snapshot.routeConfig?.path === 'login' ? 'login' : (params.get('section') || 'dashboard');
-      ++this.revision;
-      this.loading = false;
-      this.loadError = '';
-      this.record = undefined; this.records = []; this.versions = []; this.projectHistory = [];
-      this.proposal = undefined;
-      this.account = undefined;
-      this.liveRows = [];
-      this.archived = '0';
-      this.selected = undefined;
-      this.search = '';
-      this.status = 'Todos';
-      this.tab = 'Información';
-      this.action = undefined;
-      this.menuOpen = false;
-      this.notice = this.route.snapshot.queryParamMap.get('denied') === '1' ? 'Tu rol no tiene acceso a esa sección.' : '';
-      if (this.live) void this.loadLive();
-      if (this.section === 'login') this.password = '';
-    });
+  private async loadProject(id: number, fresh: () => boolean): Promise<void> {
+    const [detail, activities, milestones, documents] = await Promise.all([
+      this.api.request<Row>('projects/detail.php', { project_id: id }),
+      this.api.request<Row>('activities/list.php', { project_id: id }),
+      this.api.request<Row>('milestones/list.php', { project_id: id }),
+      this.api.request<Row>('documents/list.php', { project_id: id }),
+    ]);
+    if (!fresh()) return;
+    this.project = detail['item'];
+    this.activities = activities['items'];
+    this.milestones = milestones['items'];
+    this.documents = documents['items'];
+    if (this.tab === 'Historial') await this.loadHistory();
+    if (this.versionsOf) await this.showVersions(this.versionsOf, true);
   }
 
-  get roleLabel(): string { return this.roles.find(role => role.value === this.role)?.label || ''; }
-  get view(): View | undefined { return this.views.find(view => view.key === this.section); }
-  get allowed(): boolean { return this.role !== null && (!this.view || this.view.roles.includes(this.role)); }
-  get menu(): View[] { return this.views.filter(view => this.role !== null && view.roles.includes(this.role)); }
-  get scoped(): boolean { return ['participants', 'activities', 'milestones', 'documents', 'monitoring'].includes(this.section); }
-  get visibleRows(): DemoRow[] {
-    if (this.section === 'proposals') return this.liveRows;
-    let rows = this.live ? this.liveRows : this.view?.rows || [];
-    // Los datos restringidos no se presentan a estudiantes ni a Coordinación.
-    if (this.section === 'documents' && this.role !== 'researcher') rows = rows.filter(row => row.cells[3] !== 'Restringido');
+  private message(error: unknown, fallback: string): string { return error instanceof Error ? error.message : fallback; }
+  private say(text: string, tone: 'ok' | 'error' = 'ok'): void { this.notice = text; this.noticeTone = tone; this.changeDetector.markForCheck(); }
 
-    return rows.filter(row => row.cells.join(' ').toLocaleLowerCase().includes(this.search.toLocaleLowerCase()) &&
-      (this.status === 'Todos' || row.cells.includes(this.status)));
-  }
-  get statuses(): string[] {
-    const index = this.section === 'documents' ? 3 : this.view?.columns.findIndex(column => ['Estado', 'Decisión', 'Participación'].includes(column)) ?? -1;
-    return index < 0 ? [] : [...new Set((this.live ? this.liveRows : this.view?.rows || []).map(row => row.cells[index]))];
-  }
-  get createAction(): Action | undefined { return this.availableActions.find(action => /^(Crear|Agregar|Subir documento|Solicitar)/.test(action.label)); }
-  get availableActions(): Action[] { return (this.view?.actions || []).filter(action => this.role !== null && action.roles.includes(this.role)); }
-  get detailActions(): Action[] {
-    return this.availableActions.filter(action => {
-      if (action === this.createAction) return false;
-      if (this.record) return this.canResearchAction(action);
-      const state = this.selected?.cells[2];
-      if (this.section === 'closures' && action.endpoint === 'closures/review.php') return state === 'Pendiente';
-      if (this.section === 'evaluations' && action.endpoint === 'evaluations/submit.php') return state === 'Pendiente';
-      if (this.section === 'proposals') {
-        const p = this.proposal;
-        const user = this.auth.user();
-        if (!p || !user) return false;
-        if (action.endpoint === 'evaluations/submit.php') return this.role === 'evaluator' && p.status === 'under_evaluation';
-        if (action.endpoint === 'proposals/archive.php') return true;
-        if (Number(p.is_archived)) return false;
-        if (action.endpoint === 'evaluations/assign.php') return p.status === 'pending_coordinator';
-        if (action.endpoint === 'proposals/review.php') {
-          return p.status === 'pending_researcher_review' && Number(p.responsible_researcher_id) === user.id;
-        }
-        return Number(p.author_id) === user.id && p.status.startsWith('changes_requested_') &&
-          (action.endpoint !== 'proposals/resubmit.php' || Boolean(Number(p.correction_pending_resubmit)));
-      }
-      if (this.section === 'activities') {
-        if (/Comenzar/.test(action.label)) return state === 'Pendiente';
-        if (/Enviar a revisión|Adjuntar/.test(action.label)) return state === 'En progreso';
-        if (action.endpoint === 'activities/review.php') return state === 'En revisión';
-        if (/Reasignar/.test(action.label)) return state !== 'Completada';
-      }
-      if (this.section === 'documents' && this.role === 'student' && this.selected?.cells[3] === 'Bloqueado' && /Retirar/.test(action.label)) return false;
-      return true;
-    });
-  }
-  get tabs(): string[] {
-    const extras: Record<string, string[]> = {
-      proposals: ['Evaluaciones', 'Historial'], projects: ['Propuesta de origen', 'Equipo', 'Actividades', 'Hitos', 'Documentos', 'Historial'],
-      activities: ['Evidencias', 'Historial'], documents: ['Versiones'], milestones: ['Actividades'],
-    };
-    return ['Información', ...(extras[this.section] || [])];
-  }
-
-  // Inicia sesión con la cuenta real y abre únicamente una ruta interna permitida.
-  async login(form: NgForm): Promise<void> {
+  // =====================================================================
+  // Acceso
+  // =====================================================================
+  async login(): Promise<void> {
     if (this.loginBusy) return;
     this.loginError = '';
     this.auth.sessionMessage = '';
-    if (form.invalid || !this.username.trim() || !this.password) {
-      this.loginError = 'Escribe tu usuario y contraseña.';
-      return;
-    }
+    if (!this.username.trim() || !this.password) { this.loginError = 'Escribe tu usuario y contraseña.'; return; }
     this.loginBusy = true;
     try {
       await this.auth.login(this.username, this.password);
       this.password = '';
+      this.showLoginPassword = false;
       const destination = this.route.snapshot.queryParamMap.get('returnUrl');
-      const safeUrl = destination && /^\/app\/[a-z]+(?:\/\d+)?$/.test(destination) ? destination : '/app/dashboard';
+      const safeUrl = destination && /^\/app\/[a-z-]+(?:\/\d+)?(?:\?[\w=&%-]*)?$/.test(destination) ? destination : '/app/dashboard';
       await this.router.navigateByUrl(safeUrl, { replaceUrl: true });
     } catch (error) {
       this.password = '';
-      this.loginError = error instanceof Error ? error.message : 'No se pudo iniciar sesión.';
+      this.loginError = this.message(error, 'No se pudo iniciar sesión.');
     } finally {
       this.loginBusy = false;
       this.changeDetector.markForCheck();
     }
   }
 
-  // El cierre se confirma con PHP antes de abandonar la sesión.
   async logout(): Promise<void> {
     if (this.logoutBusy) return;
+    if (this.dialog && !confirm('Tienes un formulario abierto. ¿Cerrar sesión de todos modos?')) return;
     this.logoutBusy = true;
-    this.notice = '';
     try {
       await this.auth.logout();
-      this.password = '';
-      this.username = '';
-      this.messages = [];
-      this.values = {};
-      this.action = undefined;
+      this.password = ''; this.username = ''; this.messages = []; this.dialog = undefined;
       await this.router.navigate(['/login'], { replaceUrl: true });
     } catch (error) {
-      this.notice = error instanceof Error ? error.message : 'No se pudo cerrar sesión. Inténtalo de nuevo.';
+      this.say(this.message(error, 'No se pudo cerrar sesión. Inténtalo de nuevo.'), 'error');
     } finally {
       this.logoutBusy = false;
       this.changeDetector.markForCheck();
     }
   }
-  openDetail(row: DemoRow): void { this.router.navigate(['/app', this.section, row.id]); }
-  setTab(tab: string): void { this.tab = tab; if (this.record) void this.loadTab(); }
-  async openForm(action: Action): Promise<void> {
-    this.action = action;
-    this.values = Object.fromEntries(action.fields.map(field => [field.key, (field.key === 'activity_ids' || field.key === 'project_ids' ? [] : '') as any]));
-    if (action.endpoint === 'users/create.php') this.values['role'] = 'student';
-    this.file = undefined;
-    this.formError = '';
-    if (this.record) {
-      for (const [key,value] of Object.entries(this.record)) this.values[key] = (Array.isArray(value) ? value.map(String) : value == null ? '' : String(value)) as any;
-      this.values['context'] = String(this.record['project_id'] || this.record['id']);
-      // Bloqueo y restricción se proponen con el valor contrario al actual (la acción es "Cambiar").
-      for (const field of action.fields) {
-        if (field.type === 'boolean' && field.key in this.record) this.values[field.key] = Number(this.record[field.key]) ? 'false' : 'true';
-      }
-    } else if (this.projectId) this.values['context'] = this.projectId;
-    this.reassignTargets = {};
-    this.removalActivities = [];
-    if (this.selected) {
-      const cells = this.selected.cells;
-      this.values['title'] = cells[0];
-      this.values['name'] = cells[0];
-      this.values['username'] = cells[1];
-      if (!this.record) this.values['description'] = this.section === 'activities' ? cells[0] : '';
-    }
-    if (this.account) this.values['email'] = this.account.email || '';
-    if (this.proposal) {
-      this.values['description'] = this.proposal.description;
-      this.values['objectives'] = this.proposal.objectives;
-      this.values['archived'] = String(!Number(this.proposal.is_archived));
-    }
-    if (!['users','proposals','evaluations'].includes(this.section)) {
-      await this.loadFormOptions(action); return;
-    }
-    const kind = action.fields.some(f => f.type === 'evaluator') ? 'evaluators' :
-      this.role === 'student' && action.fields.some(f => f.type === 'researcher') ? 'researchers' : null;
-    const needsRoles = this.section === 'users' && action.fields.some(f => f.type === 'role');
-    if (this.live && (kind || needsRoles)) {
-      if (kind) this[kind] = [];
-      this.saving = true;
-      try {
-        if (kind) {
-          const result = await this.catalogs.list(kind);
-          this[kind] = result.items.map(item => ({ value: String(item.id), label: item.name }));
-        } else {
-          this.roles = (await this.catalogs.roles()).items;
-        }
-      } catch (error) {
-        this.formError = error instanceof Error ? error.message : 'No se pudo cargar el catálogo.';
-      } finally {
-        this.saving = false;
-        this.changeDetector.markForCheck();
-      }
+
+  // =====================================================================
+  // Filtros y navegación dentro de una sección
+  // =====================================================================
+  setProposalFilter(value: string): void { this.filter = value; this.page = 1; void this.load(); }
+  searchProposals(): void { this.page = 1; void this.load(); }
+  goPage(page: number): void { this.page = page; void this.load(); }
+
+  get visibleProjects(): Row[] {
+    const term = this.search.trim().toLocaleLowerCase();
+    return this.projects.filter(p =>
+      (!this.filter || p['status'] === this.filter || (this.filter === 'open' && ['active', 'changes', 'closing'].includes(p['status']))) &&
+      (!term || `${p['title']} ${p['researcher_name']}`.toLocaleLowerCase().includes(term)));
+  }
+  get visibleUsers(): Row[] {
+    const term = this.search.trim().toLocaleLowerCase();
+    return this.users.filter(u => (!this.userFilter || u['status'] === this.userFilter) &&
+      (!term || `${u['name']} ${u['username']} ${u['email'] || ''}`.toLocaleLowerCase().includes(term)));
+  }
+
+  setTab(tab: string): void {
+    this.tab = tab;
+    void this.router.navigate([], { relativeTo: this.route, queryParams: { tab }, replaceUrl: true });
+    if (tab === 'Historial') void this.loadHistory();
+  }
+  private async loadHistory(): Promise<void> {
+    if (!this.project) return;
+    try {
+      this.history = (await this.api.request<Row>('projects/history.php', { project_id: this.project['id'] }))['items'];
+    } catch (error) { this.say(this.message(error, 'No se pudo cargar el historial.'), 'error'); }
+    this.changeDetector.markForCheck();
+  }
+  async showVersions(documentId: number, keep = false): Promise<void> {
+    if (this.versionsOf === documentId && !keep) { this.versionsOf = 0; return; }
+    this.versionsOf = documentId;
+    try {
+      this.versions = (await this.api.request<Row>('documents/versions.php', { document_id: documentId }))['items'];
+    } catch (error) { this.say(this.message(error, 'No se pudieron cargar las versiones.'), 'error'); }
+    this.changeDetector.markForCheck();
+  }
+
+  // =====================================================================
+  // Permisos que la interfaz muestra (el servidor vuelve a validarlos)
+  // =====================================================================
+  get projectEditable(): boolean { return ['active', 'changes'].includes(this.project?.['status']); }
+  get isLead(): boolean { return this.role === 'researcher' && Number(this.project?.['responsible_researcher_id']) === this.me; }
+  get isMember(): boolean {
+    return (this.project?.['participants'] || []).some((p: Row) => Number(p['user_id']) === this.me && Number(p['is_active']) === 1);
+  }
+  get activeMembers(): Row[] { return (this.project?.['participants'] || []).filter((p: Row) => Number(p['is_active']) === 1); }
+  get formerMembers(): Row[] { return (this.project?.['participants'] || []).filter((p: Row) => Number(p['is_active']) !== 1); }
+  get openActivities(): number { return this.activities.filter(a => ['pending', 'in_review', 'changes'].includes(a['status'])).length; }
+  isProjectLead(member: Row): boolean { return Number(member['user_id']) === Number(this.project?.['responsible_researcher_id']); }
+  canDeleteDocument(doc: Row): boolean { return this.projectEditable && (this.isLead || Number(doc['created_by']) === this.me); }
+
+  get canReviewProposal(): boolean {
+    const p = this.proposal;
+    if (!p) return false;
+    return (p['status'] === 'pending_researcher_review' && this.role === 'researcher' && Number(p['responsible_researcher_id']) === this.me) ||
+      (p['status'] === 'pending_coordinator' && this.role === 'coordinator');
+  }
+  get isAuthor(): boolean { return Number(this.proposal?.['author_id']) === this.me; }
+  get canCancelProposal(): boolean {
+    return !!this.proposal && (this.isAuthor || this.role === 'coordinator') &&
+      !['approved', 'rejected', 'cancelled'].includes(this.proposal['status']);
+  }
+  get proposalWaitingOn(): string {
+    const p = this.proposal;
+    if (!p) return '';
+    if (p['status'] === 'pending_researcher_review') return `Esperando la revisión de ${p['researcher_name']}.`;
+    if (p['status'] === 'pending_coordinator') return 'Esperando la decisión de Coordinación.';
+    if (p['status'] === 'changes_requested') return `${p['author_name']} debe corregirla y reenviarla.`;
+    return '';
+  }
+
+  get activityLead(): boolean { return this.role === 'researcher' && Number(this.activity?.['lead_id']) === this.me; }
+  get activityMine(): boolean { return Number(this.activity?.['participant_id']) === this.me; }
+  get activityEditable(): boolean { return ['active', 'changes'].includes(this.activity?.['project_status']); }
+  get activityOpen(): boolean { return ['pending', 'in_review', 'changes'].includes(this.activity?.['status']); }
+
+  // =====================================================================
+  // Diálogo único: abrir, validar y guardar
+  // =====================================================================
+  openDialog(dialog: Dialog): void {
+    this.dialog = dialog;
+    this.dialogError = '';
+    this.dialogFile = undefined;
+    this.shown = {};
+    for (const field of dialog.fields) {
+      if (dialog.values[field.key] === undefined) dialog.values[field.key] = field.type === 'checks' ? [] : '';
     }
   }
-  closeForm(): void { this.action = undefined; }
-  options(field: Field): { value: string; label: string }[] {
-    const options: Record<string, { value: string; label: string }[]> = {
-      role: this.roles, account: [{ value: 'active', label: 'Activo' }, { value: 'inactive', label: 'Inactivo' }],
-      review: [{ value: 'approved', label: 'Aprobar' }, { value: 'changes_requested', label: 'Solicitar cambios' }, { value: 'rejected', label: 'Rechazar' }],
-      activityReview: [{ value: 'approved', label: 'Aprobar' }, { value: 'changes_requested', label: 'Solicitar cambios' }],
-      boolean: [{ value: 'true', label: 'Sí' }, { value: 'false', label: 'No' }],
-      researcher: this.researchers,
-      evaluator: this.evaluators,
-      participant: this.participantOptions,
-      activities: this.activityOptions,
-      projects: this.projectOptions,
-      format: [{ value: 'json', label: 'JSON' }, { value: 'pdf', label: 'Vista imprimible / Guardar como PDF' }],
-    };
-    if (this.live && field.type === 'researcher') return this.researchers;
-    if (this.live && field.type === 'evaluator') return this.evaluators;
-    return options[field.type] || [];
+  closeDialog(): void { if (!this.saving) this.dialog = undefined; }
+  isRequired(field: DialogField): boolean { return !!field.required || !!field.requiredWhen?.(this.dialog?.values || {}); }
+  toggleCheck(field: DialogField, value: string, checked: boolean): void {
+    const list: string[] = this.dialog!.values[field.key];
+    this.dialog!.values[field.key] = checked ? [...list, value] : list.filter(item => item !== value);
   }
-  // Los catálogos se muestran como lista aunque todavía estén vacíos (antes caían en un campo de texto).
-  isSelect(field: Field): boolean {
-    return ['researcher', 'evaluator', 'participant', 'activities', 'projects', 'role', 'account', 'review',
-      'activityReview', 'boolean', 'format'].includes(field.type) || this.options(field).length > 0;
-  }
-  isRequired(field: Field): boolean {
-    if (field.type === 'optional' || field.key === 'email' || field.key === 'reassignments' || field.key === 'version_note') return false;
-    if (field.key === 'responsible_researcher_id') return this.role === 'student';
-    if (field.key === 'observations') return ['evaluations/submit.php','proposals/review.php'].includes(this.action?.endpoint || '') || this.values['decision'] === 'changes_requested';
-    return true;
-  }
+  isChecked(field: DialogField, value: string): boolean { return (this.dialog?.values[field.key] || []).includes(value); }
   chooseFile(event: Event): void {
     const file = (event.target as HTMLInputElement).files?.[0];
-    this.file = file;
-    if (file) this.values['file'] = file.name;
+    this.dialogFile = file;
+    this.dialogError = '';
+    if (file && file.size > this.backend.maxUploadBytes) {
+      this.dialogError = `El archivo pesa ${(file.size / 1048576).toFixed(1)} MB; el máximo es ${this.backend.maxUploadBytes / 1048576} MB.`;
+    }
   }
-  async submitForm(form: NgForm): Promise<void> {
-    if (this.saving) return;
-    this.formError = '';
-    form.form.markAllAsTouched();
-    const missing = (this.action?.fields || []).filter(field => {
-      if (field.key === 'responsible_researcher_id' && this.role !== 'student') return false;
+  passwordOk(value: unknown): boolean { return PASSWORD_RULE.test(String(value || '')); }
+
+  async submitDialog(): Promise<void> {
+    const dialog = this.dialog;
+    if (!dialog || this.saving) return;
+    const values = dialog.values;
+    const missing = dialog.fields.filter(field => {
       if (!this.isRequired(field)) return false;
-      if (field.type === 'file') return !this.file;
-      const value = this.values[field.key];
-      return value == null || (Array.isArray(value) ? value.length === 0 : String(value).trim() === '');
+      if (field.type === 'file') return !this.dialogFile;
+      const value = values[field.key];
+      return Array.isArray(value) ? value.length === 0 : String(value ?? '').trim() === '';
     });
-    if (missing.length) {
-      this.formError = 'Completa: ' + missing.map(field => field.label).join(', ') + '.';
-      return;
-    }
-    if (form.invalid) {
-      const invalid = Object.entries(form.controls).filter(([, control]) => control.invalid);
-      this.formError = 'Revisa: ' + invalid.map(([key, control]) => {
-        const field = this.action?.fields.find(item => item.key === key);
-        return (field?.label || (key === 'context' ? 'Proyecto' : key.startsWith('reassign_') ? 'Reasignación de actividades' : key)) + (control.hasError('email') ? ' (correo inválido)' : '');
-      }).join(', ') + '.';
-      return;
-    }
-    const password = this.values['new_password'] || this.values['password'];
-    if (password && !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(password)) {
-      this.formError = 'La contraseña necesita mínimo 8 caracteres, mayúscula, minúscula y número.';
-      return;
-    }
-    if (this.values['new_password'] !== this.values['confirm_password']) {
-      this.formError = 'Las contraseñas no coinciden.';
-      return;
-    }
-    if (this.action && !['users','proposals','evaluations'].includes(this.section)) { await this.saveResearch(); return; }
-    if (this.live && this.action) {
-      const action = this.action;
-      const revision = this.revision;
-      const body: Record<string, string | number | boolean> = {};
-      for (const field of action.fields) {
-        const value = this.values[field.key];
-        if (value !== undefined && field.key !== 'confirm_password') body[field.key] = value;
+    if (missing.length) { this.dialogError = 'Completa: ' + missing.map(field => field.label).join(', ') + '.'; return; }
+    for (const field of dialog.fields) {
+      const value = String(values[field.key] ?? '').trim();
+      if (field.type === 'password' && value && !PASSWORD_RULE.test(value)) {
+        this.dialogError = 'La contraseña necesita de 8 a 72 caracteres, con mayúscula, minúscula y número.'; return;
       }
-      if (this.account) body['user_id'] = this.account.id;
-      if (this.proposal) body['proposal_id'] = this.proposal.id;
-      if (action.endpoint.endsWith('/archive.php')) body['archived'] = body['archived'] === 'true';
-      if (body['new_password']) {
-        body['password'] = body['new_password'];
-        delete body['new_password'];
-      }
-      this.saving = true;
-      try {
-        if (this.section === 'users') await this.users.save(action.endpoint, body);
-        else if (action.endpoint === 'evaluations/assign.php') await this.evaluations.assign(body);
-        else await this.proposals.save(action.endpoint, body);
-        if (revision !== this.revision) return;
-        this.notice = 'Cambios guardados.';
-        this.values = {};
-        this.closeForm();
-        await this.loadLive();
-      } catch (error) {
-        if (revision === this.revision) this.formError = error instanceof Error ? error.message : 'No se pudo guardar.';
-      } finally {
-        this.saving = false;
-        this.changeDetector.markForCheck();
-      }
-      return;
+      if (field.type === 'email' && value && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) { this.dialogError = 'Revisa el correo.'; return; }
+      if (field.type === 'date' && value && field.min && value < field.min) { this.dialogError = `${field.label}: la fecha ya pasó.`; return; }
+    }
+    if (this.dialogFile && this.dialogFile.size > this.backend.maxUploadBytes) return;
+    this.saving = true;
+    this.dialogError = '';
+    try {
+      const text = await dialog.submit(values, this.dialogFile);
+      this.dialog = undefined;
+      this.say(text);
+      await this.load(true);
+    } catch (error) {
+      this.dialogError = this.message(error, 'No se pudo guardar.');
+    } finally {
+      this.saving = false;
+      this.changeDetector.markForCheck();
     }
   }
 
-  record?: Record<string, any>;
-  records: Record<string, any>[] = [];
-  projects: Record<string, any>[] = [];
-  currentProject?: Record<string, any>;
-  versions: Record<string, any>[] = [];
-  relatedActivities: Record<string, any>[] = [];
-  projectHistory: Record<string, any>[] = [];
-  participantOptions: {value:string;label:string}[] = [];
-  activityOptions: {value:string;label:string}[] = [];
-  counts: number[] = [0,0,0,0];
-  file?: File;
-  asking = false;
-  get projectOptions(): {value:string;label:string}[] { return this.projects.map(p=>({value:String(p['id']),label:p['title']})); }
-  get moduleName(): string { return this.section === 'institutional' ? 'institutional-documents' : this.section; }
-  get recordIdKey(): string { return ({projects:'project_id',monitoring:'project_id',reports:'project_id',participants:'participant_record_id',activities:'activity_id',milestones:'milestone_id',documents:'document_id',institutional:'document_id',closures:'closure_id'} as Record<string,string>)[this.section]; }
-  get progress(): number { const p=this.record || this.currentProject; return p?.['total_activities'] ? Math.round(100*p['completed_activities']/p['total_activities']) : 0; }
-  label(value: any): string { return ({active:'Activo',closing:'En cierre',finalized:'Finalizado',pending:'Pendiente',in_progress:'En progreso',in_review:'En revisión',completed:'Completada',achieved:'Alcanzado',approved:'Aprobado',changes_requested:'Cambios solicitados',student:'Estudiante',researcher:'Investigador'} as Record<string,string>)[String(value)] || String(value ?? ''); }
-  researchRow(r: Record<string,any>): DemoRow {
-    const s=this.section;
-    let cells: any[]=[];
-    if (['projects','reports','monitoring'].includes(s)) {
-      const n=Number(r['total_activities']), done=Number(r['completed_activities']); const percent=n?Math.round(done*100/n):0;
-      cells=s==='monitoring'?[r['title'],`${done} / ${n}`,`${percent} %`,this.label(r['status'])]:s==='reports'?[r['title'],r['researcher_name'],`${percent} %`,this.label(r['status'])]:[r['title'],r['researcher_name'],this.label(r['status']),`${percent} %`];
-    } else if (s==='participants') cells=[r['name'],this.label(r['role']),Number(r['is_active'])?'Activa':'Retirada',r['joined_at']];
-    else if (s==='activities') cells=[r['description'],r['participant_name'] || `Usuario #${r['participant_id']}`,this.label(r['status']),r['deadline']];
-    else if (s==='milestones') cells=[r['description'],r['target_date'],`${r['activity_count'] || r['activity_ids']?.length || 0} actividades`,this.label(r['status'])];
-    else if (s==='closures') cells=[r['title'] || this.currentProject?.['title'],r['requester_name'] || `Usuario #${r['requested_by']}`,this.label(r['status']),r['created_at']];
-    else if (s==='institutional') cells=[r['title'],`v${r['version'] || ''}`,r['created_at'],'Disponible'];
-    else cells=[r['title'],'Repositorio del proyecto',`v${r['version'] || ''}`,Number(r['restricted'])?'Restringido':Number(r['blocked'])?'Bloqueado':'Disponible'];
-    return {id:Number(r['id']),cells:cells.map(v=>String(v??''))};
+  private post(path: string, body: Row): Promise<Row> { return this.api.request<Row>(path, {}, body); }
+  private async fileBody(file?: File): Promise<Row> {
+    if (!file) return {};
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
+      reader.readAsDataURL(file);
+    });
+    const body: Row = { filename: file.name, file_base64: base64 };
+    // Supabase no abre archivos ZIP: el texto de DOCX/XLSX para el asistente se extrae aquí.
+    if (this.backend.mode === 'supabase' && /\.(docx|xlsx)$/i.test(file.name)) body['text_content'] = await extractOfficeText(file);
+    return body;
   }
-  async loadResearch(id: number, revision: number): Promise<void> {
-    if (this.section==='dashboard') { const r=await this.api.request<any>('dashboard/summary.php'); if(revision===this.revision) {this.counts=r.counts; this.projects=r.projects;} return; }
-    if (this.section==='institutional') {
-      const r=await this.api.request<any>('institutional-documents/list.php'); if(revision!==this.revision)return;
-      this.records=r.items;
-    } else {
-      const result=await this.api.request<any>('projects/list.php'); if(revision!==this.revision)return;
-      this.projects=result.items;
-      if (!this.projects.some(p=>String(p['id'])===this.projectId)) this.projectId=String(this.projects[0]?.['id'] || '');
-      if (['projects','reports','monitoring'].includes(this.section)) this.records=this.projects;
-      else if (id) {
-        const result=await this.api.request<any>(`${this.moduleName}/detail.php`,{[this.recordIdKey]:id}); if(revision!==this.revision)return;
-        this.record=result.item; this.projectId=String(result.item.project_id); this.records=[result.item];
-      } else if (this.projectId) {
-        const r=await this.api.request<any>(`${this.moduleName}/list.php`,{project_id:this.projectId}); if(revision!==this.revision)return; this.records=r.items;
-      } else this.records=[];
-      this.currentProject=this.projects.find(p=>String(p['id'])===this.projectId);
-    }
-    if(revision!==this.revision)return;
-    this.liveRows=this.records.map(r=>this.researchRow(r));
-    if(id) {
-      this.record=this.records.find(r=>Number(r['id'])===id);
-      if(!this.record) throw new Error('Registro no disponible.');
-      this.selected=this.researchRow(this.record);
-      if(['projects','monitoring','reports'].includes(this.section)) {this.projectId=String(id); this.currentProject=this.record;}
-    }
+  private async options(path: string, params: Row): Promise<Option[]> {
+    const result = await this.api.request<Row>(path, params);
+    return (result['items'] as Row[]).map(item => ({ value: String(item['id']), label: item['role'] ? `${item['name']} · ${this.roleName(item['role'])}` : item['name'] }));
   }
-  async changeProject(): Promise<void> { this.selected=undefined; this.record=undefined; await this.loadLive(); }
-  canResearchAction(a: Action): boolean {
-    const r=this.record; if(!r) return false;
-    const p=this.currentProject; const lead=this.role==='researcher' && Number(p?.['responsible_researcher_id'])===this.auth.user()?.id;
-    if(this.section==='institutional') return this.role==='coordinator';
-    if(this.section==='projects') return a.endpoint==='projects/change-researcher.php' && r['status']==='active';
-    if(this.section==='reports') return this.role==='coordinator' || lead;
-    if(this.section==='closures') return this.role==='coordinator' && r['status']==='pending';
-    if(p?.['status']!=='active')return false;
-    if(this.section==='documents') return /set-block|set-restriction/.test(a.endpoint)?lead:!(this.role==='student' && Number(r['blocked']));
-    if(this.section==='activities') {
-      const state=r['status'];
-      if(/start|submit|evidence/.test(a.endpoint)) return Number(r['participant_id'])===this.auth.user()?.id && (a.endpoint.includes('start')?state==='pending':['pending','in_progress'].includes(state) && (!a.endpoint.includes('submit') || state==='in_progress'));
-      return lead && (!a.endpoint.includes('review') || state==='in_review');
-    }
-    if(this.section==='milestones') return lead && (!a.endpoint.includes('achieve') || r['status']!=='achieved');
-    return lead;
+  private async withOptions(build: () => Promise<void>): Promise<void> {
+    try { await build(); } catch (error) { this.say(this.message(error, 'No se pudieron cargar las opciones.'), 'error'); }
   }
-  get canCreate(): boolean {
-    if(!this.createAction)return false;
-    if(['users','proposals','institutional'].includes(this.section))return true;
-    const p=this.currentProject;
-    if(!p || p['status']!=='active')return false;
-    return this.section==='documents' || (this.role==='researcher' && Number(p['responsible_researcher_id'])===this.auth.user()?.id);
-  }
-  async loadFormOptions(a: Action): Promise<void> {
-    this.saving=true;
-    try {
-      if(a.fields.some(f=>f.type==='researcher')) this.researchers=(await this.catalogs.list('researchers')).items.map(x=>({value:String(x.id),label:x.name}));
-      if(a.fields.some(f=>f.type==='participant') && this.projectId) {
-        const r=await this.api.request<any>('catalogs/participants.php',{project_id:this.projectId,all:a.endpoint==='participants/add.php'?'1':'0'});
-        this.participantOptions=r.items.map((x:any)=>({value:String(x.id),label:x.name}));
+
+  // =====================================================================
+  // Propuestas
+  // =====================================================================
+  newProposal(): void {
+    void this.withOptions(async () => {
+      const fields: DialogField[] = [
+        { key: 'title', label: 'Título', type: 'text', required: true },
+        { key: 'description', label: 'Descripción', type: 'textarea', required: true },
+        { key: 'objectives', label: 'Objetivos', type: 'textarea', required: true },
+      ];
+      if (this.role === 'student') {
+        fields.push({ key: 'responsible_researcher_id', label: 'Investigador responsable', type: 'select', required: true,
+          options: await this.options('catalogs/researchers.php', {}), hint: 'Será quien revise tu propuesta y dirija el proyecto.' });
       }
-      if(a.fields.some(f=>f.type==='activities') && this.projectId) {
-        const r=await this.api.request<any>('activities/list.php',{project_id:this.projectId}); this.activityOptions=r.items.map((x:any)=>({value:String(x.id),label:x.description}));
+      this.openDialog({
+        title: 'Nueva propuesta', confirmLabel: 'Enviar propuesta', fields, values: {},
+        intro: this.role === 'student' ? 'Se enviará al investigador que elijas; después la revisa Coordinación.'
+          : 'Como investigador, tu propuesta pasa directo a Coordinación.',
+        submit: async values => {
+          const result = await this.post('proposals/create.php', values);
+          void this.router.navigate(['/app/proposals', result['proposal_id']]);
+          return 'Propuesta enviada.';
+        },
+      });
+    });
+  }
+
+  reviewProposal(): void {
+    const p = this.proposal!;
+    const byCoordination = p['status'] === 'pending_coordinator';
+    this.openDialog({
+      title: 'Revisar propuesta', confirmLabel: 'Guardar decisión', values: {},
+      intro: byCoordination ? 'Si apruebas, el proyecto se crea en ese momento con el investigador responsable y el autor en el equipo.'
+        : 'Si apruebas, la propuesta pasa a Coordinación para la decisión final.',
+      fields: [
+        { key: 'decision', label: 'Decisión', type: 'choice', required: true, options: [
+          { value: 'approved', label: byCoordination ? 'Aprobar y crear el proyecto' : 'Aprobar y enviar a Coordinación' },
+          { value: 'changes_requested', label: 'Solicitar cambios al autor' },
+          { value: 'rejected', label: 'Rechazar (definitivo)' },
+        ] },
+        { key: 'observations', label: 'Observaciones para el autor', type: 'textarea',
+          requiredWhen: v => v['decision'] === 'changes_requested' || v['decision'] === 'rejected',
+          hint: 'Obligatorias al pedir cambios o rechazar: el autor las verá tal cual.' },
+      ],
+      submit: async values => {
+        const result = await this.post('proposals/review.php', { proposal_id: p['id'], ...values });
+        if (result['project_id']) { void this.router.navigate(['/app/projects', result['project_id']]); return 'Propuesta aprobada: el proyecto ya está creado.'; }
+        return values['decision'] === 'rejected' ? 'Propuesta rechazada.' : values['decision'] === 'approved' ? 'Propuesta enviada a Coordinación.' : 'Se pidieron cambios al autor.';
+      },
+    });
+  }
+
+  correctProposal(): void {
+    const p = this.proposal!;
+    void this.withOptions(async () => {
+      const fields: DialogField[] = [
+        { key: 'title', label: 'Título', type: 'text', required: true },
+        { key: 'description', label: 'Descripción', type: 'textarea', required: true },
+        { key: 'objectives', label: 'Objetivos', type: 'textarea', required: true },
+      ];
+      if (this.role === 'student') {
+        fields.push({ key: 'responsible_researcher_id', label: 'Investigador responsable', type: 'select', required: true,
+          options: await this.options('catalogs/researchers.php', {}),
+          hint: 'Si lo cambias, la propuesta vuelve a revisarse desde el nuevo investigador.' });
       }
-      // Al retirar a un participante se muestran sus actividades pendientes para reasignarlas (RN-30).
-      if(a.endpoint==='participants/remove.php' && this.projectId) {
-        const r=await this.api.request<any>('activities/list.php',{project_id:this.projectId});
-        this.removalActivities=r.items;
-      }
-    } catch(e) {this.formError=e instanceof Error?e.message:'No se pudieron cargar las opciones.';}
-    finally {this.saving=false; this.changeDetector.markForCheck();}
+      this.openDialog({
+        title: 'Corregir y reenviar', confirmLabel: 'Guardar y reenviar', fields,
+        intro: p['returns_to'] === 'pending_coordinator' ? 'Al guardar, regresa a Coordinación.' : 'Al guardar, regresa al investigador responsable.',
+        values: { title: p['title'], description: p['description'], objectives: p['objectives'],
+          responsible_researcher_id: String(p['responsible_researcher_id']) },
+        submit: async values => { await this.post('proposals/update.php', { proposal_id: p['id'], ...values }); return 'Correcciones enviadas.'; },
+      });
+    });
   }
-  async saveResearch(): Promise<void> {
-    if(!this.action)return;
-    this.saving=true;
-    try {
-      const body:Record<string,any>={};
-      for(const f of this.action.fields) if(f.key!=='file') body[f.key]=this.values[f.key];
-      body['project_id']=Number(this.values['context'] || this.projectId);
-      if(this.record) body[this.recordIdKey]=Number(this.record['id']);
-      for(const key of ['blocked','restricted']) if(key in body) body[key]=body[key]==='true';
-      for(const key of ['activity_ids','project_ids']) if(key in body && !Array.isArray(body[key])) body[key]=[body[key]].filter(Boolean);
-      if(this.action.endpoint==='participants/remove.php') {
-        const missing=this.pendingRemoval.filter(a=>!this.reassignTargets[String(a['id'])]);
-        if(missing.length) throw new Error('Elige a quién pasa cada actividad pendiente.');
-        body['reassignments']=Object.fromEntries(this.pendingRemoval.map(a=>[String(a['id']),Number(this.reassignTargets[String(a['id'])])]));
-      }
-      if(this.file) {
-        const limit=this.backend.maxUploadBytes;
-        if(this.file.size>limit)throw new Error(`El archivo supera ${limit/1024/1024} MB.`);
-        body['filename']=this.file.name;
-        body['file_base64']=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('No se pudo leer el archivo.'));reader.readAsDataURL(this.file!);});
-        // Supabase no abre archivos ZIP: el texto de DOCX/XLSX para la IA se extrae aquí.
-        if(this.backend.mode==='supabase' && /\.(docx|xlsx)$/i.test(this.file.name)) body['text_content']=await extractOfficeText(this.file);
-      }
-      if(this.action.endpoint==='evidence/upload.php') body['activity_id']=this.record?.['id'];
-      const result=await this.api.request<any>(this.action.endpoint,{},body);
-      if(this.section==='reports') this.showReport(result,body['format']);
-      this.notice='Operación completada.'; this.closeForm(); this.file=undefined; await this.loadLive();
-    } catch(e) {this.formError=e instanceof Error?e.message:'No se pudo guardar.';}
-    finally {this.saving=false;this.changeDetector.markForCheck();}
+
+  cancelProposal(): void {
+    const p = this.proposal!;
+    this.openDialog({
+      title: 'Cancelar propuesta', confirmLabel: 'Sí, cancelar propuesta', danger: true, values: {},
+      warning: `«${p['title']}» dejará de revisarse. Si fue un error, el autor o Coordinación pueden reactivarla y volverá a donde estaba.`,
+      fields: [{ key: 'reason', label: 'Motivo', type: 'textarea', required: true }],
+      submit: async values => { await this.post('proposals/cancel.php', { proposal_id: p['id'], ...values }); return 'Propuesta cancelada.'; },
+    });
   }
-  async loadTab(): Promise<void> {
-    try {
-      const id=Number(this.record?.['id']);
-      if(this.tab==='Actividades' && this.section==='milestones') {
-        const r=await this.api.request<any>('activities/list.php',{project_id:this.projectId});
-        this.relatedActivities=r.items.filter((a:any)=>this.record?.['activity_ids']?.map(Number).includes(Number(a.id)));
-      }
-      if(this.tab==='Versiones') this.versions=(await this.api.request<any>(`${this.moduleName}/versions.php`,{document_id:id})).items;
-      if(this.tab==='Evidencias') this.versions=(await this.api.request<any>('evidence/list.php',{project_id:this.projectId,activity_id:id})).items;
-      if(this.tab==='Historial') this.projectHistory=(await this.api.request<any>(`${this.section}/history.php`,{[this.recordIdKey]:id})).items;
-    } catch(e) {this.notice=e instanceof Error?e.message:'No se pudo cargar.';}
-    this.changeDetector.markForCheck();
+
+  reactivateProposal(): void {
+    const p = this.proposal!;
+    this.openDialog({
+      title: 'Reactivar propuesta', confirmLabel: 'Reactivar', values: {}, fields: [],
+      intro: `«${p['title']}» vuelve al punto donde estaba antes de cancelarse.`,
+      submit: async () => { await this.post('proposals/reactivate.php', { proposal_id: p['id'] }); return 'Propuesta reactivada.'; },
+    });
   }
-  async download(id?: number, version?: number): Promise<void> {
-    const documentId=id || Number(this.record?.['id']); if(!documentId)return;
-    const module=this.section==='institutional'?'institutional-documents':'documents';
-    const params: Record<string, number>={document_id:documentId};
-    if(version) params['version']=version;
-    try { await this.backend.download(module,params); }
-    catch(e) { this.notice=e instanceof Error?e.message:'No se pudo descargar el archivo.'; }
-    finally { this.changeDetector.markForCheck(); }
+
+  proposalEvent(action: string): string {
+    return ({
+      created: 'Propuesta registrada', resubmit: 'Corregida y reenviada', review_approved: 'Aprobada',
+      review_changes_requested: 'Cambios solicitados', review_rejected: 'Rechazada', cancelled: 'Cancelada', reactivated: 'Reactivada',
+      // Historial anterior a la versión 3:
+      update: 'Correcciones guardadas', assign: 'Evaluador asignado', archived: 'Archivada', unarchived: 'Desarchivada',
+      evaluation_approved: 'Evaluación: aprobada', evaluation_changes_requested: 'Evaluación: cambios', evaluation_rejected: 'Evaluación: rechazada',
+    } as Record<string, string>)[action] || action;
   }
-  // Reasignación de actividades pendientes al retirar a un participante.
-  reassignTargets: Record<string,string> = {};
-  removalActivities: Record<string,any>[] = [];
-  get pendingRemoval(): Record<string,any>[] {
-    const uid=String(this.values['user_id'] || '');
-    return uid ? this.removalActivities.filter(a=>String(a['participant_id'])===uid && a['status']!=='completed') : [];
-  }
-  get reassignOptions(): {value:string;label:string}[] {
-    return this.participantOptions.filter(o=>o.value!==String(this.values['user_id'] || ''));
-  }
-  showReport(data: any, format: string): void {
-    const escape=(v:any)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-    const json=JSON.stringify(data,null,2);
-    let text=json, mime='application/json', ext='json';
-    if(format==='pdf') {
-      mime='text/html'; ext='html';
-      text='<!doctype html><html lang="es"><meta charset="utf-8"><title>Reporte de seguimiento</title><style>body{font:15px system-ui;margin:40px;color:#18253a}table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:8px}h2{margin-top:32px}@media print{button{display:none}}</style><button onclick="window.print()">Imprimir / Guardar como PDF</button><h1>Reporte de seguimiento</h1><p>'+escape(data.generated_at)+'</p>';
-      for(const p of data.projects) {
-        text+='<h2>'+escape(p.title)+'</h2><p>Responsable: '+escape(p.researcher_name)+' · Estado: '+escape(this.label(p.status))+' · Avance: '+escape(p.progress)+' %</p>';
-        for(const [key,title] of [['participants','Participantes'],['activities','Actividades'],['milestones','Hitos']]) {
-          text+='<h3>'+title+'</h3><table>';
-          for(const r of p[key]) text+='<tr><td>'+escape(r.name || r.description)+'</td><td>'+escape(r.participant_name || r.role || '')+'</td><td>'+escape(this.label(r.status || (Number(r.is_active)?'active':'Retirado')))+'</td><td>'+escape(r.deadline || r.target_date || r.joined_at)+'</td></tr>';
-          text+='</table>';
+
+  // =====================================================================
+  // Proyecto: datos, cierre, cancelación y reporte
+  // =====================================================================
+  editProject(): void {
+    const p = this.project!;
+    this.openDialog({
+      title: 'Editar datos del proyecto', confirmLabel: 'Guardar', values: {
+        title: p['title'], description: p['description'] || '', objectives: p['objectives'] || '',
+        start_date: p['start_date'] || '', end_date: p['end_date'] || '' },
+      fields: [
+        { key: 'title', label: 'Título', type: 'text', required: true },
+        { key: 'description', label: 'Descripción', type: 'textarea', required: true },
+        { key: 'objectives', label: 'Objetivos', type: 'textarea', required: true },
+        { key: 'start_date', label: 'Fecha de inicio', type: 'date' },
+        { key: 'end_date', label: 'Fecha de término', type: 'date' },
+      ],
+      submit: async values => {
+        if (values['start_date'] && values['end_date'] && values['end_date'] < values['start_date']) {
+          throw new Error('La fecha de término debe ser posterior a la de inicio.');
         }
-      } text+='</html>';
-    }
-    const url=URL.createObjectURL(new Blob([text],{type:mime}));
-    if(format==='pdf')window.open(url,'_blank','noopener');
-    else {const a=document.createElement('a');a.href=url;a.download='reporte-investigacion.'+ext;a.click();}
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
+        await this.post('projects/update.php', { project_id: p['id'], ...values });
+        return 'Proyecto actualizado.';
+      },
+    });
   }
-  async ask(): Promise<void> {
-    if(!this.question.trim() || this.asking)return;
-    const question=this.question.trim();this.question='';this.asking=true;
-    this.messages.push({author:'Tú',text:question});
-    const timer=setTimeout(()=>{this.notice='El asistente sigue procesando tu consulta…';this.changeDetector.markForCheck();},10000);
+
+  requestClosure(): void {
+    const p = this.project!;
+    if (this.openActivities > 0) {
+      this.say(`Antes de solicitar el cierre, termina o cancela las ${this.openActivities} actividades abiertas.`, 'error');
+      this.setTab('Actividades');
+      return;
+    }
+    this.openDialog({
+      title: 'Solicitar cierre', confirmLabel: 'Solicitar cierre', values: {},
+      intro: 'Coordinación revisará el proyecto. Mientras tanto no se podrá modificar. Si pide cambios, el proyecto queda "En cambios" y lo puedes volver a solicitar.',
+      fields: [{ key: 'observations', label: 'Resumen de resultados (opcional)', type: 'textarea' }],
+      submit: async values => { await this.post('closures/request.php', { project_id: p['id'], ...values }); return 'Cierre solicitado.'; },
+    });
+  }
+
+  reviewClosure(): void {
+    const p = this.project!;
+    this.openDialog({
+      title: 'Revisar cierre', confirmLabel: 'Guardar decisión', values: {},
+      intro: p['last_closure']?.['observations'] ? `Resumen del responsable: ${p['last_closure']['observations']}` : undefined,
+      fields: [
+        { key: 'decision', label: 'Decisión', type: 'choice', required: true, options: [
+          { value: 'approved', label: 'Aprobar: el proyecto queda Completado' },
+          { value: 'changes_requested', label: 'Pedir cambios: el proyecto queda En cambios' },
+        ] },
+        { key: 'observations', label: 'Observaciones', type: 'textarea', requiredWhen: v => v['decision'] === 'changes_requested',
+          hint: 'Obligatorias si pides cambios: indica qué falta.' },
+      ],
+      submit: async values => {
+        await this.post('closures/review.php', { project_id: p['id'], ...values });
+        return values['decision'] === 'approved' ? 'Proyecto completado.' : 'Se pidieron cambios al responsable.';
+      },
+    });
+  }
+
+  changeResearcher(): void {
+    const p = this.project!;
+    void this.withOptions(async () => {
+      const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(p['responsible_researcher_id']));
+      this.openDialog({
+        title: 'Cambiar investigador responsable', confirmLabel: 'Cambiar responsable', values: {},
+        intro: `${p['researcher_name']} seguirá en el equipo como investigador y conservará su historial.`,
+        fields: [{ key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', required: true, options }],
+        submit: async values => { await this.post('projects/change-researcher.php', { project_id: p['id'], ...values }); return 'Responsable actualizado.'; },
+      });
+    });
+  }
+
+  cancelProject(): void {
+    const p = this.project!;
+    this.openDialog({
+      title: 'Cancelar proyecto', confirmLabel: 'Sí, cancelar proyecto', danger: true, values: {},
+      warning: `«${p['title']}» quedará en solo lectura para todo el equipo. No se borra nada: Coordinación puede reabrirlo si fue un error.`,
+      fields: [{ key: 'reason', label: 'Motivo de la cancelación', type: 'textarea', required: true, hint: 'El equipo verá este motivo.' }],
+      submit: async values => { await this.post('projects/cancel.php', { project_id: p['id'], ...values }); return 'Proyecto cancelado.'; },
+    });
+  }
+
+  reopenProject(): void {
+    const p = this.project!;
+    this.openDialog({
+      title: 'Reabrir proyecto', confirmLabel: 'Reabrir', values: {},
+      intro: `«${p['title']}» volverá a "En proceso" y el equipo podrá trabajar de nuevo.`,
+      fields: [{ key: 'reason', label: 'Motivo', type: 'textarea', required: true }],
+      submit: async values => { await this.post('projects/reopen.php', { project_id: p['id'], ...values }); return 'Proyecto reabierto.'; },
+    });
+  }
+
+  async downloadReport(general = false): Promise<void> {
     try {
-      const r=await this.api.request<any>('assistant/query.php',{}, {question,mode:this.assistantAction});
-      this.messages.push({author:'Asistente',text:r.answer+(r.sources.length?'\n\nFuentes recuperadas:\n'+r.sources.map((s:any)=>`[${s.reference}] ${s.title} · v${s.version} · fragmento ${s.fragment}`).join('\n'):'')});
-    } catch(e) {this.messages.push({author:'Asistente',text:e instanceof Error?e.message:'No se pudo consultar.'});}
-    finally {clearTimeout(timer);this.notice='';this.asking=false;this.changeDetector.markForCheck();}
+      const data = general ? await this.post('reports/general.php', {}) : await this.post('reports/project.php', { project_id: this.project!['id'] });
+      this.showReport(data);
+    } catch (error) { this.say(this.message(error, 'No se pudo generar el reporte.'), 'error'); }
+  }
+
+  // =====================================================================
+  // Equipo
+  // =====================================================================
+  addMember(): void {
+    const p = this.project!;
+    void this.withOptions(async () => {
+      const options = await this.options('catalogs/participants.php', { project_id: p['id'], all: '1' });
+      if (!options.length) { this.say('No hay más estudiantes o investigadores activos para agregar.', 'error'); return; }
+      this.openDialog({
+        title: 'Agregar integrante', confirmLabel: 'Agregar', values: {},
+        fields: [
+          { key: 'user_id', label: 'Persona', type: 'select', required: true, options },
+          { key: 'project_role', label: 'Rol en el proyecto (opcional)', type: 'text', hint: 'Por ejemplo: tesista, analista de datos.' },
+        ],
+        submit: async values => { await this.post('participants/add.php', { project_id: p['id'], ...values }); return 'Integrante agregado.'; },
+      });
+    });
+  }
+
+  editMemberRole(member: Row): void {
+    this.openDialog({
+      title: `Rol de ${member['name']}`, confirmLabel: 'Guardar', values: { project_role: member['project_role'] || '' },
+      fields: [{ key: 'project_role', label: 'Rol en el proyecto', type: 'text' }],
+      submit: async values => {
+        await this.post('participants/update.php', { project_id: this.project!['id'], user_id: member['user_id'], ...values });
+        return 'Rol actualizado.';
+      },
+    });
+  }
+
+  removeMember(member: Row): void {
+    const p = this.project!;
+    const pending = Number(member['pending_activities'] || 0);
+    const options = this.activeMembers.filter(m => m['user_id'] !== member['user_id'])
+      .map(m => ({ value: String(m['user_id']), label: m['name'] + (this.isProjectLead(m) ? ' (responsable)' : '') }));
+    this.openDialog({
+      title: 'Retirar del equipo', confirmLabel: 'Sí, retirar', danger: true,
+      values: { reassign_to: String(p['responsible_researcher_id']) },
+      warning: `${member['name']} ya no podrá ver el proyecto. Su historial se conserva y puedes reincorporarlo después.`,
+      intro: pending ? `Tiene ${pending} actividad(es) sin terminar: elige quién las recibe.` : 'No tiene actividades pendientes.',
+      fields: pending ? [{ key: 'reassign_to', label: 'Sus actividades pasan a', type: 'select', required: true, options }] : [],
+      submit: async values => {
+        const result = await this.post('participants/remove.php', { project_id: p['id'], user_id: member['user_id'], ...values });
+        return Number(result['activities_moved']) ? `Integrante retirado; se reasignaron ${result['activities_moved']} actividad(es).` : 'Integrante retirado.';
+      },
+    });
+  }
+
+  rejoinMember(member: Row): void {
+    this.openDialog({
+      title: 'Reincorporar al equipo', confirmLabel: 'Reincorporar', values: {}, fields: [],
+      intro: `${member['name']} volverá a ver el proyecto con su rol anterior.`,
+      submit: async () => {
+        await this.post('participants/add.php', { project_id: this.project!['id'], user_id: member['user_id'] });
+        return 'Integrante reincorporado.';
+      },
+    });
+  }
+
+  // =====================================================================
+  // Actividades
+  // =====================================================================
+  activityForm(existing?: Row): void {
+    const projectId = existing ? existing['project_id'] : this.project!['id'];
+    void this.withOptions(async () => {
+      const options = await this.options('catalogs/participants.php', { project_id: projectId });
+      this.openDialog({
+        title: existing ? 'Editar actividad' : 'Nueva actividad', confirmLabel: existing ? 'Guardar' : 'Crear actividad',
+        values: existing ? { description: existing['description'], participant_id: String(existing['participant_id']), deadline: existing['deadline'] } : {},
+        fields: [
+          { key: 'description', label: 'Descripción', type: 'textarea', required: true },
+          { key: 'participant_id', label: 'Responsable', type: 'select', required: true, options },
+          { key: 'deadline', label: 'Fecha límite', type: 'date', required: true, min: existing ? undefined : this.todayIso },
+        ],
+        submit: async values => {
+          if (existing) await this.post('activities/update.php', { activity_id: existing['id'], ...values });
+          else await this.post('activities/create.php', { project_id: projectId, ...values });
+          return existing ? 'Actividad actualizada.' : 'Actividad creada.';
+        },
+      });
+    });
+  }
+
+  submitActivity(): void {
+    const a = this.activity!;
+    const files = this.evidence.length;
+    this.openDialog({
+      title: 'Entregar para revisión', confirmLabel: 'Entregar', values: {},
+      intro: files ? `Se enviará con ${files} evidencia(s) adjunta(s).` : undefined,
+      warning: files ? undefined : 'No has adjuntado evidencias. Puedes entregar así, pero revisa que no te falte ningún archivo.',
+      fields: [{ key: 'comment', label: 'Comentario para el responsable (opcional)', type: 'textarea' }],
+      submit: async values => { await this.post('activities/submit.php', { activity_id: a['id'], ...values }); return 'Actividad entregada.'; },
+    });
+  }
+
+  reviewActivity(): void {
+    const a = this.activity!;
+    const reopening = a['status'] === 'completed';
+    this.openDialog({
+      title: reopening ? 'Reabrir actividad' : 'Revisar entrega', confirmLabel: 'Guardar', values: reopening ? { decision: 'changes_requested' } : {},
+      intro: reopening ? 'Úsalo si la aceptaste por error o falta algo: vuelve a la persona asignada con tus observaciones.' : undefined,
+      fields: [
+        ...(reopening ? [] : [{ key: 'decision', label: 'Decisión', type: 'choice' as const, required: true, options: [
+          { value: 'approved', label: 'Aceptar: queda Completada' },
+          { value: 'changes_requested', label: 'Pedir cambios' },
+        ] }]),
+        { key: 'observations', label: 'Observaciones', type: 'textarea', requiredWhen: v => v['decision'] === 'changes_requested' },
+      ],
+      submit: async values => {
+        await this.post('activities/review.php', { activity_id: a['id'], ...values });
+        return values['decision'] === 'approved' ? 'Actividad aceptada.' : 'Se pidieron cambios.';
+      },
+    });
+  }
+
+  cancelActivity(): void {
+    const a = this.activity!;
+    this.openDialog({
+      title: 'Cancelar actividad', confirmLabel: 'Sí, cancelar actividad', danger: true, values: {},
+      warning: 'Deja de contar en el avance y ya no se podrá entregar. Si fue un error, crea la actividad de nuevo.',
+      fields: [{ key: 'reason', label: 'Motivo', type: 'textarea', required: true }],
+      submit: async values => { await this.post('activities/cancel.php', { activity_id: a['id'], ...values }); return 'Actividad cancelada.'; },
+    });
+  }
+
+  addEvidence(): void {
+    const a = this.activity!;
+    this.openDialog({
+      title: 'Adjuntar evidencia', confirmLabel: 'Adjuntar', values: {},
+      fields: [
+        { key: 'file', label: 'Archivo', type: 'file', required: true, hint: 'PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB.' },
+        { key: 'description', label: 'Descripción (opcional)', type: 'text' },
+      ],
+      submit: async (values, file) => {
+        await this.post('evidence/upload.php', { project_id: a['project_id'], activity_id: a['id'], description: values['description'], ...(await this.fileBody(file)) });
+        return 'Evidencia adjunta.';
+      },
+    });
+  }
+
+  removeEvidence(doc: Row): void {
+    this.openDialog({
+      title: 'Quitar evidencia', confirmLabel: 'Sí, quitar', danger: true, values: {}, fields: [],
+      warning: `Se quitará «${doc['title']}». Puedes adjuntar el archivo correcto después.`,
+      submit: async () => { await this.post('evidence/delete.php', { document_id: doc['id'] }); return 'Evidencia quitada.'; },
+    });
+  }
+
+  // =====================================================================
+  // Hitos
+  // =====================================================================
+  milestoneForm(existing?: Row): void {
+    const p = this.project!;
+    const options = this.activities.filter(a => a['status'] !== 'cancelled').map(a => ({ value: String(a['id']), label: a['description'] }));
+    this.openDialog({
+      title: existing ? 'Editar hito' : 'Nuevo hito', confirmLabel: 'Guardar',
+      intro: 'El hito se marca como Alcanzado solo, cuando todas sus actividades estén completadas.',
+      values: existing ? { description: existing['description'], target_date: existing['target_date'],
+        activity_ids: (existing['activity_ids'] || []).map(String) } : {},
+      fields: [
+        { key: 'description', label: 'Descripción', type: 'textarea', required: true },
+        { key: 'target_date', label: 'Fecha objetivo', type: 'date', required: true },
+        { key: 'activity_ids', label: 'Actividades del hito', type: 'checks', options,
+          hint: options.length ? 'Puedes vincularlas ahora o después.' : 'Todavía no hay actividades; puedes vincularlas después.' },
+      ],
+      submit: async values => {
+        const body = { project_id: p['id'], ...values };
+        if (existing) await this.post('milestones/update.php', { milestone_id: existing['id'], ...body });
+        else await this.post('milestones/create.php', body);
+        return 'Hito guardado.';
+      },
+    });
+  }
+
+  deleteMilestone(m: Row): void {
+    this.openDialog({
+      title: 'Eliminar hito', confirmLabel: 'Sí, eliminar', danger: true, values: {}, fields: [],
+      warning: `Se eliminará el hito «${m['description']}». Sus actividades no se borran.`,
+      submit: async () => { await this.post('milestones/delete.php', { milestone_id: m['id'] }); return 'Hito eliminado.'; },
+    });
+  }
+
+  // =====================================================================
+  // Documentos del proyecto y fuentes institucionales
+  // =====================================================================
+  uploadDocument(existing?: Row, institutional = false): void {
+    const module = institutional ? 'institutional-documents' : 'documents';
+    const fields: DialogField[] = existing ? [] : [{ key: 'title', label: 'Título', type: 'text', required: true }];
+    fields.push({ key: 'file', label: 'Archivo', type: 'file', required: true, hint: 'PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB.' });
+    if (existing && !institutional) fields.push({ key: 'version_note', label: 'Qué cambió (opcional)', type: 'text' });
+    this.openDialog({
+      title: existing ? `Nueva versión de «${existing['title']}»` : institutional ? 'Agregar fuente' : 'Subir documento',
+      confirmLabel: 'Subir', values: {}, fields,
+      intro: existing ? 'Las versiones anteriores se conservan y se pueden descargar.' : undefined,
+      submit: async (values, file) => {
+        const body: Row = { ...values, ...(await this.fileBody(file)) };
+        delete body['file'];
+        if (!institutional) body['project_id'] = this.project!['id'];
+        if (existing) body['document_id'] = existing['id'];
+        const action = existing ? (institutional ? 'update' : 'upload-version') : 'upload';
+        await this.post(`${module}/${action}.php`, body);
+        return existing ? 'Nueva versión guardada.' : 'Archivo subido.';
+      },
+    });
+  }
+
+  toggleRestriction(doc: Row): void {
+    const restricted = Number(doc['restricted']) === 1;
+    this.openDialog({
+      title: restricted ? 'Mostrar a todo el equipo' : 'Solo investigadores', confirmLabel: 'Cambiar visibilidad', values: {}, fields: [],
+      intro: restricted ? `Los estudiantes del proyecto podrán ver «${doc['title']}».` : `Los estudiantes del proyecto dejarán de ver «${doc['title']}».`,
+      submit: async () => {
+        await this.post('documents/set-restriction.php', { document_id: doc['id'], restricted: !restricted });
+        return 'Visibilidad actualizada.';
+      },
+    });
+  }
+
+  deleteDocument(doc: Row, institutional = false): void {
+    this.openDialog({
+      title: institutional ? 'Retirar fuente' : 'Eliminar documento', confirmLabel: 'Sí, eliminar', danger: true, values: {}, fields: [],
+      warning: `«${doc['title']}» y todas sus versiones dejarán de estar disponibles${institutional ? ' para el asistente' : ' para el equipo'}.`,
+      submit: async () => {
+        await this.post(`${institutional ? 'institutional-documents' : 'documents'}/delete.php`, { document_id: doc['id'] });
+        return 'Archivo eliminado.';
+      },
+    });
+  }
+
+  async download(module: 'documents' | 'evidence' | 'institutional-documents', documentId: number, version?: number): Promise<void> {
+    const params: Record<string, number> = { document_id: documentId };
+    if (version) params['version'] = version;
+    try { await this.backend.download(module, params); }
+    catch (error) { this.say(this.message(error, 'No se pudo descargar el archivo.'), 'error'); }
+  }
+
+  // =====================================================================
+  // Usuarios
+  // =====================================================================
+  private roleOptions(): Option[] { return (Object.keys(ROLE_LABELS) as Role[]).map(value => ({ value, label: ROLE_LABELS[value] })); }
+
+  newUser(): void {
+    this.openDialog({
+      title: 'Nuevo usuario', confirmLabel: 'Crear usuario', values: { role: 'student' },
+      fields: [
+        { key: 'name', label: 'Nombre completo', type: 'text', required: true },
+        { key: 'username', label: 'Usuario', type: 'text', required: true, hint: 'Sin espacios: letras, números, punto o guion.' },
+        { key: 'email', label: 'Correo (opcional)', type: 'email' },
+        { key: 'password', label: 'Contraseña inicial', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número.' },
+        { key: 'role', label: 'Rol', type: 'choice', required: true, options: this.roleOptions() },
+      ],
+      submit: async values => { await this.post('users/create.php', values); return `Cuenta creada. Comparte el usuario «${values['username']}» y su contraseña.`; },
+    });
+  }
+
+  editUser(user: Row): void {
+    const self = Number(user['id']) === this.me;
+    this.openDialog({
+      title: `Editar a ${user['name']}`, confirmLabel: 'Guardar cambios',
+      values: { name: user['name'], username: user['username'], email: user['email'] || '', role: user['role'], status: user['status'] },
+      intro: self ? 'No puedes cambiar tu propio rol ni desactivar tu cuenta.'
+        : 'Si cambias el rol o lo desactivas, su sesión se cierra. El sistema avisa si tiene proyectos o actividades que primero hay que pasar a alguien más.',
+      fields: [
+        { key: 'name', label: 'Nombre completo', type: 'text', required: true },
+        { key: 'username', label: 'Usuario', type: 'text', required: true },
+        { key: 'email', label: 'Correo (opcional)', type: 'email' },
+        ...(self ? [] : [
+          { key: 'role', label: 'Rol', type: 'choice' as const, required: true, options: this.roleOptions() },
+          { key: 'status', label: 'Acceso', type: 'choice' as const, required: true,
+            options: [{ value: 'active', label: 'Activo' }, { value: 'inactive', label: 'Inactivo (no puede entrar)' }] },
+        ]),
+      ],
+      submit: async values => { await this.post('users/update.php', { user_id: user['id'], ...values }); return 'Usuario actualizado.'; },
+    });
+  }
+
+  resetPassword(user: Row): void {
+    this.openDialog({
+      title: `Nueva contraseña para ${user['name']}`, confirmLabel: 'Cambiar contraseña', values: {},
+      intro: 'Sus sesiones abiertas se cerrarán. Usa el ojo para revisar lo que escribiste antes de guardar.',
+      fields: [{ key: 'password', label: 'Nueva contraseña', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número.' }],
+      submit: async values => { await this.post('users/reset-password.php', { user_id: user['id'], ...values }); return 'Contraseña actualizada.'; },
+    });
+  }
+
+  // =====================================================================
+  // Historial del proyecto
+  // =====================================================================
+  eventLabel(event: Row): string {
+    const key = `${event['entity']}:${event['action']}`;
+    return ({
+      'project:created_from_proposal': 'Proyecto creado desde la propuesta', 'project:configured': 'Datos del proyecto actualizados',
+      'project:change-researcher': 'Cambio de investigador responsable', 'project:cancelled': 'Proyecto cancelado',
+      'project:reopened': 'Proyecto reabierto', 'participant:add': 'Integrante agregado', 'participant:update': 'Rol de integrante actualizado',
+      'participant:remove': 'Integrante retirado', 'activity:create': 'Actividad creada', 'activity:update': 'Actividad editada',
+      'activity:reassign': 'Actividad reasignada', 'activity:submit': 'Actividad entregada', 'activity:review': 'Entrega revisada',
+      'activity:cancel': 'Actividad cancelada', 'activity:start': 'Actividad iniciada', 'milestone:create': 'Hito creado',
+      'milestone:update': 'Hito editado', 'milestone:delete': 'Hito eliminado', 'milestone:achieve': 'Hito alcanzado',
+      'document:upload': 'Documento subido', 'document:upload-version': 'Nueva versión de documento', 'document:update': 'Documento actualizado',
+      'document:delete': 'Documento eliminado', 'document:set-restriction': 'Visibilidad de documento cambiada',
+      'document:set-block': 'Bloqueo de documento cambiado', 'closure:request': 'Cierre solicitado', 'closure:review': 'Cierre revisado',
+    } as Record<string, string>)[key] || event['action'];
+  }
+  eventDetail(event: Row): string {
+    let data: Row = {};
+    try { data = JSON.parse(event['details'] || '{}') || {}; } catch { return ''; }
+    const input: Row = data['input'] || {};
+    const parts = [data['user'], data['title'], data['description'], input['description'], data['reason'] && `Motivo: ${data['reason']}`,
+      input['reason'] && `Motivo: ${input['reason']}`, input['decision'] && (input['decision'] === 'approved' ? 'Aceptada' : 'Cambios pedidos'),
+      input['observations'], data['before'] && typeof data['before'] === 'string' && `${data['before']} → ${data['after']}`];
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  // =====================================================================
+  // Reporte imprimible
+  // =====================================================================
+  showReport(data: Row): void {
+    const esc = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+    let html = '<!doctype html><html lang="es"><meta charset="utf-8"><title>Reporte de seguimiento</title><style>body{font:15px system-ui;margin:40px;color:#18253a}table{border-collapse:collapse;width:100%;margin-bottom:12px}td,th{border:1px solid #bbb;padding:8px;text-align:left}h2{margin-top:32px}@media print{button{display:none}}</style>' +
+      '<button onclick="window.print()">Imprimir / Guardar como PDF</button><h1>Reporte de seguimiento</h1><p>Generado por ' + esc(data['generated_by']) + ' · ' + esc(this.date(data['generated_at'])) + '</p>';
+    for (const p of data['projects'] || []) {
+      html += '<h2>' + esc(p.title) + '</h2><p>Responsable: ' + esc(p.researcher_name) + ' · Estado: ' + esc(this.status('project', p.status).label) + ' · Avance: ' + esc(p.progress) + ' %</p>';
+      html += '<h3>Equipo</h3><table>' + (p.participants || []).map((r: Row) => '<tr><td>' + esc(r['name']) + '</td><td>' + esc(r['project_role'] || this.roleName(r['role'])) + '</td><td>' + (Number(r['is_active']) ? 'Activo' : 'Retirado') + '</td></tr>').join('') + '</table>';
+      html += '<h3>Actividades</h3><table>' + (p.activities || []).map((r: Row) => '<tr><td>' + esc(r['description']) + '</td><td>' + esc(r['participant_name']) + '</td><td>' + esc(this.status('activity', r['status']).label) + '</td><td>' + esc(this.date(r['deadline'])) + '</td></tr>').join('') + '</table>';
+      html += '<h3>Hitos</h3><table>' + (p.milestones || []).map((r: Row) => '<tr><td>' + esc(r['description']) + '</td><td>' + esc(this.date(r['target_date'])) + '</td><td>' + esc(this.status('milestone', r['status']).label) + '</td></tr>').join('') + '</table>';
+    }
+    const url = URL.createObjectURL(new Blob([html + '</html>'], { type: 'text/html' }));
+    const opened = window.open(url, '_blank');
+    if (!opened) {
+      const link = document.createElement('a');
+      link.href = url; link.download = 'reporte-investigacion.html'; link.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  // =====================================================================
+  // Asistente
+  // =====================================================================
+  async ask(): Promise<void> {
+    if (!this.question.trim() || this.asking) return;
+    const question = this.question.trim();
+    this.question = '';
+    this.asking = true;
+    this.messages.push({ author: 'Tú', text: question });
+    try {
+      const r = await this.api.request<Row>('assistant/query.php', {}, { question, mode: this.assistantMode });
+      const sources = (r['sources'] || []) as Row[];
+      this.messages.push({ author: 'Asistente', text: r['answer'] + (sources.length ? '\n\nFuentes:\n' +
+        sources.map(s => `[${s['reference']}] ${s['title']}${s['version'] ? ' · v' + s['version'] : ''}`).join('\n') : '') });
+    } catch (error) {
+      this.messages.push({ author: 'Asistente', text: this.message(error, 'No se pudo consultar.') });
+    } finally {
+      this.asking = false;
+      this.changeDetector.markForCheck();
+    }
   }
 }

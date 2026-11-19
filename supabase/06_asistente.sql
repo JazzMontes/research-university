@@ -5,7 +5,7 @@
 --   actividades, hitos y participantes · 4 Genera respuesta con citas.
 --
 -- Permisos: Coordinador → cualquier proyecto. Investigador y Estudiante →
--- solo proyectos en los que participan. Evaluador → propuestas asignadas.
+-- solo proyectos en los que participan.
 -- Todos → fuentes institucionales. Los filtros se aplican ANTES de leer texto.
 --
 -- assistant/context.php → contexto autorizado (lo usa la función Edge "asistente"
@@ -41,7 +41,7 @@ begin
     return array[pid];
   end if;
   select coalesce(array_agg(p.id order by p.id desc), '{}') into ids
-    from research.projects p where u.role <> 'evaluator' and research.project_visible(u, p.id);
+    from research.projects p where research.project_visible(u, p.id);
   return ids;
 end $$;
 
@@ -56,13 +56,13 @@ returns text language sql immutable as $$ select coalesce(to_char(x, 'DD/MM/YYYY
 create or replace function research.status_label(s text)
 returns text language sql immutable as $$
   select case s
-    when 'active' then 'Activo' when 'closing' then 'En cierre' when 'finalized' then 'Finalizado'
-    when 'pending' then 'Pendiente' when 'in_progress' then 'En progreso' when 'in_review' then 'En revisión'
+    when 'active' then 'En proceso' when 'changes' then 'En cambios' when 'closing' then 'Cierre solicitado'
+    when 'finalized' then 'Completado' when 'cancelled' then 'Cancelado'
+    when 'pending' then 'Pendiente' when 'in_review' then 'En revisión'
     when 'completed' then 'Completada' when 'achieved' then 'Alcanzado' when 'approved' then 'Aprobada'
     when 'rejected' then 'Rechazada' when 'changes_requested' then 'Cambios solicitados'
-    when 'pending_researcher_review' then 'En revisión del investigador' when 'pending_coordinator' then 'Pendiente de Coordinación'
-    when 'under_evaluation' then 'En evaluación' when 'changes_requested_researcher' then 'Cambios solicitados por el investigador'
-    when 'changes_requested_evaluator' then 'Cambios solicitados por el evaluador' else coalesce(s, '') end;
+    when 'pending_researcher_review' then 'En revisión del investigador' when 'pending_coordinator' then 'En revisión de Coordinación'
+    else coalesce(s, '') end;
 $$;
 
 -- Texto estructurado de un proyecto (fuente [P<id>]).
@@ -72,7 +72,7 @@ set search_path = research, extensions, pg_temp as $$
   select format(E'### [P%s] Proyecto: %s\nEstado: %s · Responsable: %s · Inicio: %s · Término: %s · Avance: %s de %s actividades completadas\nDescripción / resumen: %s\nObjetivos: %s\nEquipo: %s\nActividades:\n%s\nHitos:\n%s%s',
     p.id, p.title, research.status_label(p.status), r.name, research.fmt_date(p.start_date), research.fmt_date(p.end_date),
     (select count(*) from research.activities a where a.project_id = p.id and a.status = 'completed'),
-    (select count(*) from research.activities a where a.project_id = p.id),
+    (select count(*) from research.activities a where a.project_id = p.id and a.status <> 'cancelled'),
     research.cut(p.description, 1500), research.cut(p.objectives, 1500),
     coalesce((select string_agg(x.name || ' (' || research.role_label(x.role) || coalesce(', ' || t.project_role, '') || ')', '; ' order by x.name)
               from research.participants t join research.users x on x.id = t.user_id where t.project_id = p.id and t.is_active = 1), 'sin integrantes'),
@@ -82,7 +82,7 @@ set search_path = research, extensions, pg_temp as $$
               from (select * from research.activities where project_id = p.id order by deadline limit 40) a
               join research.users x on x.id = a.participant_id), '- (sin actividades registradas)'),
     coalesce((select string_agg(format('- [H%s] %s — fecha objetivo: %s — estado: %s — actividades completadas: %s de %s',
-                m.id, research.cut(m.description, 300), research.fmt_date(m.target_date), research.status_label(m.status),
+                m.id, research.cut(m.description, 300), research.fmt_date(m.target_date), research.status_label(research.milestone_status(m.id)),
                 (select count(*) from research.milestone_activities ma join research.activities a on a.id = ma.activity_id where ma.milestone_id = m.id and a.status = 'completed'),
                 (select count(*) from research.milestone_activities ma where ma.milestone_id = m.id)), E'\n' order by m.target_date)
               from (select * from research.milestones where project_id = p.id order by target_date limit 20) m), '- (sin hitos registrados)'),
@@ -128,10 +128,10 @@ begin
 
   -- Propuestas visibles (estado del flujo de aprobación).
   select coalesce(string_agg(format('- [Propuesta %s] %s — estado: %s%s — autor: %s — investigador responsable: %s%s',
-      x.id, x.title, research.status_label(x.status), case when x.is_archived = 1 then ' (archivada)' else '' end,
+      x.id, x.title, research.status_label(x.status), '',
       au.name, rr.name,
       coalesce(' — última observación: ' || research.cut((select h.details from research.proposal_history h where h.proposal_id = x.id
-          and h.details is not null and (h.action like 'review_%' or h.action like 'evaluation_%') order by h.id desc limit 1), 400), '')), E'\n' order by x.id desc), '')
+          and h.details is not null and (h.action like 'review_%' or h.action = 'cancelled') order by h.id desc limit 1), 400), '')), E'\n' order by x.id desc), '')
     into proposals_text
     from (select y.* from research.proposals y
           where research.proposal_visible(u, y)
@@ -193,7 +193,6 @@ begin
       'project_title', case when research.has(d, 'project_id') then (select title from research.projects where id = (d ->> 'project_id')::int) end,
       'accessible_projects', cardinality(scope), 'included_projects', cardinality(chosen),
       'permission', case u.role when 'coordinator' then 'Coordinación: puede consultar cualquier proyecto del sistema.'
-        when 'evaluator' then 'Evaluador: solo propuestas asignadas y fuentes institucionales.'
         else research.role_label(u.role) || ': solo los proyectos en los que participa.' end),
     'structured', structured, 'proposals', proposals_text, 'fragments', fragments, 'sources', sources);
 end $$;
@@ -216,14 +215,14 @@ begin
              research.fmt_date(a.deadline), research.deadline_status(a.status, a.deadline), pr.id), E'\n' order by a.deadline)
       into part
       from research.activities a join research.projects pr on pr.id = a.project_id
-      where a.project_id = any(scope) and a.status <> 'completed'
+      where a.project_id = any(scope) and a.status not in ('completed', 'cancelled')
         and (u.role = 'coordinator' or a.participant_id = u.id or (qn !~ '(tengo|mis|mias|me toca)' and pr.responsible_researcher_id = u.id));
     answer := answer || case when part is null then 'No hay actividades pendientes en tu alcance.' else
       'Actividades pendientes:' || E'\n' || part end || E'\n\n';
   end if;
   if qn ~ 'hito' then
     select string_agg(format('• %s — %s — fecha objetivo %s — %s [P%s]', m.description, pr.title, research.fmt_date(m.target_date),
-             research.status_label(m.status), pr.id), E'\n' order by m.status desc, m.target_date)
+             research.status_label(research.milestone_status(m.id)), pr.id), E'\n' order by m.target_date)
       into part
       from research.milestones m join research.projects pr on pr.id = m.project_id where m.project_id = any(scope);
     answer := answer || coalesce('Hitos:' || E'\n' || part, 'No hay hitos registrados en tus proyectos.') || E'\n\n';
@@ -242,8 +241,8 @@ begin
   if qn ~ '(avance|progreso|porcentaje)' then
     select string_agg(format('• %s: %s de %s actividades completadas, %s de %s hitos alcanzados [P%s]', pr.title,
              (select count(*) from research.activities a where a.project_id = pr.id and a.status = 'completed'),
-             (select count(*) from research.activities a where a.project_id = pr.id),
-             (select count(*) from research.milestones m where m.project_id = pr.id and m.status = 'achieved'),
+             (select count(*) from research.activities a where a.project_id = pr.id and a.status <> 'cancelled'),
+             (select count(*) from research.milestones m where m.project_id = pr.id and research.milestone_status(m.id) = 'achieved'),
              (select count(*) from research.milestones m where m.project_id = pr.id), pr.id), E'\n')
       into part from research.projects pr where pr.id = any(scope);
     answer := answer || coalesce('Avance:' || E'\n' || part, 'No hay proyectos en tu alcance.') || E'\n\n';

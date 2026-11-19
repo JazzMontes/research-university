@@ -10,36 +10,30 @@ returns text language sql immutable as $$
   select case m || '/' || a
     when 'api/health' then 'GET'
     when 'auth/login' then 'POST' when 'auth/logout' then 'POST' when 'auth/session' then 'GET'
-    when 'users/list' then 'GET' when 'users/detail' then 'GET' when 'users/create' then 'POST' when 'users/update' then 'POST'
-    when 'users/change-status' then 'POST' when 'users/change-role' then 'POST' when 'users/reset-password' then 'POST'
-    when 'catalogs/roles' then 'GET' when 'catalogs/researchers' then 'GET' when 'catalogs/evaluators' then 'GET'
-    when 'catalogs/participants' then 'GET'
+    when 'users/list' then 'GET' when 'users/create' then 'POST' when 'users/update' then 'POST'
+    when 'users/reset-password' then 'POST'
+    when 'catalogs/researchers' then 'GET' when 'catalogs/participants' then 'GET'
     when 'proposals/list' then 'GET' when 'proposals/detail' then 'GET' when 'proposals/history' then 'GET'
-    when 'proposals/create' then 'POST' when 'proposals/update' then 'POST' when 'proposals/resubmit' then 'POST'
-    when 'proposals/review' then 'POST' when 'proposals/archive' then 'POST'
-    when 'evaluations/assign' then 'POST' when 'evaluations/submit' then 'POST' when 'evaluations/assignments' then 'GET'
+    when 'proposals/create' then 'POST' when 'proposals/update' then 'POST' when 'proposals/review' then 'POST'
+    when 'proposals/cancel' then 'POST' when 'proposals/reactivate' then 'POST'
     when 'dashboard/summary' then 'GET'
     when 'projects/list' then 'GET' when 'projects/detail' then 'GET' when 'projects/history' then 'GET'
     when 'projects/update' then 'POST' when 'projects/change-researcher' then 'POST'
-    when 'monitoring/list' then 'GET' when 'monitoring/detail' then 'GET'
-    when 'participants/list' then 'GET' when 'participants/detail' then 'GET' when 'participants/history' then 'GET'
-    when 'participants/add' then 'POST' when 'participants/remove' then 'POST' when 'participants/update' then 'POST'
-    when 'activities/list' then 'GET' when 'activities/detail' then 'GET' when 'activities/history' then 'GET'
-    when 'activities/create' then 'POST' when 'activities/update' then 'POST' when 'activities/reassign' then 'POST'
-    when 'activities/start' then 'POST' when 'activities/submit' then 'POST' when 'activities/review' then 'POST'
-    when 'milestones/list' then 'GET' when 'milestones/detail' then 'GET' when 'milestones/history' then 'GET'
-    when 'milestones/create' then 'POST' when 'milestones/update' then 'POST' when 'milestones/achieve' then 'POST'
-    when 'documents/list' then 'GET' when 'documents/detail' then 'GET' when 'documents/versions' then 'GET'
-    when 'documents/download' then 'GET' when 'documents/upload' then 'POST' when 'documents/upload-version' then 'POST'
-    when 'documents/update' then 'POST' when 'documents/delete' then 'POST' when 'documents/set-block' then 'POST'
-    when 'documents/set-restriction' then 'POST'
-    when 'evidence/list' then 'GET' when 'evidence/versions' then 'GET' when 'evidence/download' then 'GET'
-    when 'evidence/upload' then 'POST'
-    when 'institutional-documents/list' then 'GET' when 'institutional-documents/detail' then 'GET'
-    when 'institutional-documents/versions' then 'GET' when 'institutional-documents/download' then 'GET'
-    when 'institutional-documents/upload' then 'POST' when 'institutional-documents/update' then 'POST'
-    when 'institutional-documents/delete' then 'POST'
-    when 'closures/list' then 'GET' when 'closures/detail' then 'GET' when 'closures/history' then 'GET'
+    when 'projects/cancel' then 'POST' when 'projects/reopen' then 'POST'
+    when 'participants/add' then 'POST' when 'participants/update' then 'POST' when 'participants/remove' then 'POST'
+    when 'activities/list' then 'GET' when 'activities/detail' then 'GET'
+    when 'activities/create' then 'POST' when 'activities/update' then 'POST' when 'activities/submit' then 'POST'
+    when 'activities/review' then 'POST' when 'activities/cancel' then 'POST'
+    when 'milestones/list' then 'GET' when 'milestones/create' then 'POST' when 'milestones/update' then 'POST'
+    when 'milestones/delete' then 'POST'
+    when 'documents/list' then 'GET' when 'documents/versions' then 'GET' when 'documents/download' then 'GET'
+    when 'documents/upload' then 'POST' when 'documents/upload-version' then 'POST' when 'documents/update' then 'POST'
+    when 'documents/delete' then 'POST' when 'documents/set-restriction' then 'POST'
+    when 'evidence/list' then 'GET' when 'evidence/download' then 'GET'
+    when 'evidence/upload' then 'POST' when 'evidence/delete' then 'POST'
+    when 'institutional-documents/list' then 'GET' when 'institutional-documents/versions' then 'GET'
+    when 'institutional-documents/download' then 'GET' when 'institutional-documents/upload' then 'POST'
+    when 'institutional-documents/update' then 'POST' when 'institutional-documents/delete' then 'POST'
     when 'closures/request' then 'POST' when 'closures/review' then 'POST'
     when 'reports/project' then 'POST' when 'reports/general' then 'POST'
     when 'assistant/context' then 'POST' when 'assistant/query' then 'POST'
@@ -70,7 +64,7 @@ begin
 
   begin
     if m = 'api' then
-      return research.ok(jsonb_build_object('status', 'ok', 'database', 'connected', 'version', 2));
+      return research.ok(jsonb_build_object('status', 'ok', 'database', 'connected', 'version', 3));
     elsif m = 'auth' and a = 'login' then
       return research.auth_login(d);
     elsif m = 'auth' and a = 'logout' then
@@ -83,9 +77,9 @@ begin
       when m = 'auth' then research.ok(jsonb_build_object('user', research.public_user(u)))
       when m = 'users' then research.ep_users(u, a, d)
       when m = 'catalogs' then research.ep_catalogs(u, a, d)
-      when m in ('proposals', 'evaluations') then research.ep_proposals(u, m, a, d)
+      when m = 'proposals' then research.ep_proposals(u, a, d)
       when m = 'dashboard' then research.ep_dashboard(u)
-      when m in ('projects', 'monitoring') then research.ep_projects(u, a, d, is_post)
+      when m = 'projects' then research.ep_projects(u, a, d, is_post)
       when m = 'participants' then research.ep_participants(u, a, d, is_post)
       when m = 'activities' then research.ep_activities(u, a, d, is_post)
       when m = 'milestones' then research.ep_milestones(u, a, d, is_post)
