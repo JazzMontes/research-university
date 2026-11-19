@@ -5,3 +5,5 @@ herramientas/legado-xampp/backend/config/database.local.php
 herramientas/legado-xampp/backend/config/ai.local.php
 *.log
 herramientas/legado-xampp/backend/config/database.local.backup-*.php
+
+*.zip
