@@ -61,3 +61,25 @@ Pendiente → Entregar → En revisión → Aceptar (**Completada**) o Pedir cam
 | Archivo de más de 5 MB | Se avisa al elegirlo, antes de subir. |
 | Cerrar el formulario sin querer | Ya no se cierra al hacer clic fuera; solo con "Volver" o ×. |
 | Acciones irreversibles | Diálogo rojo que explica qué pasará y, cuando aplica, pide motivo. |
+
+## Asistente de IA (ChatGPT o Gemini)
+- La app ahora sí llama a la función `asistente` (antes siempre respondía en modo local, sin IA). Si la función no está publicada o falla, responde con el modo local.
+- Responde tres tipos de preguntas:
+  1. **Tus proyectos y documentos**: solo con lo que tu rol puede ver, citando la fuente ([1], [P3]).
+  2. **Cómo usar la plataforma**: trae una guía del flujo v3 (cancelar, retirar integrantes, cierre, etc.).
+  3. **Dudas generales** (metodología, objetivos, APA, estadística, conceptos): con conocimiento general, marcado con una nota. Nunca inventa datos de tus proyectos.
+- Recuerda la conversación (últimos 6 mensajes).
+
+### Cambiar a ChatGPT
+1. En https://platform.openai.com → API keys → crea una clave (`sk-…`). La API se paga aparte de ChatGPT Plus: agrega saldo en Billing.
+2. Supabase → Edge Functions → Secrets:
+   - `AI_API_KEY` = tu clave `sk-…` (reemplaza la de Gemini).
+   - Si existe `AI_PROVIDER=gemini`, bórralo o ponlo en `openai`.
+   - Opcional: `AI_MODEL` (por defecto prueba `gpt-5-mini`, luego `gpt-4.1-mini` y `gpt-4o-mini`).
+   - Opcional: `AI_GENERAL=no` si quieres que solo responda sobre la plataforma.
+3. Vuelve a publicar la función: `supabase functions deploy asistente --no-verify-jwt` (o pega `supabase/functions/asistente/index.ts` en el editor de la función y Deploy).
+4. Publica la app.
+
+### Gemini (configuración actual)
+- Funciona con las claves nuevas de Google AI Studio (`AQ.…`) y con las antiguas (`AIza…`). Se usa la API nativa de Gemini, porque las claves `AQ.` no funcionan en la ruta compatible con OpenAI.
+- Solo necesitas el secreto `AI_API_KEY` con tu clave. Modelos que prueba en orden: `gemini-2.5-flash`, `gemini-flash-latest`, `gemini-2.5-flash-lite` (o fija uno con `AI_MODEL`).

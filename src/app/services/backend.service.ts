@@ -87,6 +87,24 @@ export class BackendService {
     }
   }
 
+  /**
+   * Llama a una función Edge de Supabase (p. ej. "asistente", que conecta con ChatGPT o Gemini).
+   * Devuelve null si la función no está publicada o no responde, para usar el respaldo local.
+   */
+  async callFunction<T = any>(name: string, data: Params, timeoutMs = 65000): Promise<BackendResult<T> | null> {
+    if (this.mode !== 'supabase') return null;
+    const url = environment.supabaseUrl.replace(/\/$/, '') + '/functions/v1/' + name;
+    const key = environment.supabaseKey;
+    let headers = new HttpHeaders({ apikey: key, 'Content-Type': 'application/json' });
+    if (key.startsWith('eyJ')) headers = headers.set('Authorization', `Bearer ${key}`);
+    try {
+      const result = await firstValueFrom(this.http.post<BackendResult<T>>(url, { ...data, token: this.token }, { headers }).pipe(timeout(timeoutMs)));
+      return result && typeof result.status === 'number' ? result : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Descarga un archivo: en PHP abre la URL; en Supabase recibe base64 y lo guarda. */
   async download(module: string, params: Record<string, string | number>): Promise<void> {
     if (this.mode === 'php') {

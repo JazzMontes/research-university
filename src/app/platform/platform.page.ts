@@ -1034,11 +1034,23 @@ export class PlatformPage implements OnInit {
     this.question = '';
     this.asking = true;
     this.messages.push({ author: 'Tú', text: question });
+    // Conversación previa (sin la pregunta actual) para que la IA entienda "¿y eso cómo lo hago?".
+    const history = this.messages.slice(0, -1).slice(-6).map(m => ({ author: m.author, text: m.text.split('\n\nFuentes:')[0] }));
     try {
-      const r = await this.api.request<Row>('assistant/query.php', {}, { question, mode: this.assistantMode });
+      // 1) IA (función Edge "asistente": ChatGPT o Gemini). 2) Si no está publicada, respuesta local con los datos del sistema.
+      const ai = await this.backend.callFunction<Row>('asistente', { question, mode: this.assistantMode, history });
+      let r: Row;
+      if (ai && ai.status === 401) {
+        this.backend.setToken(null);
+        await this.router.navigate(['/login'], { replaceUrl: true });
+        throw new Error('Tu sesión terminó. Vuelve a iniciar sesión.');
+      } else if (ai && ai.status >= 200 && ai.status < 300) r = ai.body;
+      else if (ai && ai.status !== 404 && ai.status < 500) throw new Error(ai.body?.['message'] || 'No se pudo consultar.');
+      else r = await this.api.request<Row>('assistant/query.php', {}, { question, mode: this.assistantMode });
       const sources = (r['sources'] || []) as Row[];
       this.messages.push({ author: 'Asistente', text: r['answer'] + (sources.length ? '\n\nFuentes:\n' +
-        sources.map(s => `[${s['reference']}] ${s['title']}${s['version'] ? ' · v' + s['version'] : ''}`).join('\n') : '') });
+        sources.map(s => `[${s['reference']}] ${s['title']}${s['version'] ? ' · v' + s['version'] : ''}`).join('\n') : '') +
+        (r['notice'] ? '\n\n(' + r['notice'] + ')' : '') });
     } catch (error) {
       this.messages.push({ author: 'Asistente', text: this.message(error, 'No se pudo consultar.') });
     } finally {

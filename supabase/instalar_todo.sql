@@ -1953,7 +1953,7 @@ begin
     if coalesce(ctx ->> 'structured', '') <> '' then
       answer := 'No encontré documentos que mencionen esos términos. Esto es lo que hay registrado en tus proyectos:' || E'\n\n' || research.cut(ctx ->> 'structured', 2500);
     else
-      answer := 'No tengo información suficiente en las fuentes autorizadas para responder. Prueba con palabras que aparezcan en los documentos o elige un proyecto.';
+      answer := 'No encontré esa información en tus proyectos ni en los documentos. Para dudas generales (metodología, redacción, citas, conceptos) el asistente necesita la IA conectada; pide a Coordinación que la configure.';
     end if;
   end if;
   -- Solo se devuelven las fuentes citadas en el texto.
