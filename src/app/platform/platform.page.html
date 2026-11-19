@@ -431,10 +431,11 @@
             }
             @for (m of messages; track $index) {
               <article class="message" [class.mine]="m.author === 'Tú'"><strong>{{ m.author }}</strong>
-                @if (m.html) { <div class="md" [innerHTML]="m.html"></div> } @else { <p>{{ m.text }}</p> }
+                @if (m.html) { <div class="md" [innerHTML]="m.html"></div> }
+                @else if (m.pending) { <p class="typing" role="status">Escribiendo<span>.</span><span>.</span><span>.</span></p> }
+                @else { <p>{{ m.text }}</p> }
               </article>
             }
-            @if (asking) { <p class="muted" role="status">Consultando…</p> }
             <form class="chat-form" (ngSubmit)="ask()">
               <select name="mode" aria-label="Tipo de consulta" [(ngModel)]="assistantMode">
                 <option value="ask">Preguntar</option><option value="summarize">Resumir</option><option value="explain">Explicar</option><option value="locate">Localizar</option>

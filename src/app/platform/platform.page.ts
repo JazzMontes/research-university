@@ -106,7 +106,7 @@ export class PlatformPage implements OnInit {
 
   question = '';
   assistantMode = 'ask';
-  messages: { author: string; text: string; html?: string }[] = [];
+  messages: { author: string; text: string; html?: string; pending?: boolean }[] = [];
   asking = false;
 
   // ---------- diálogo único ----------
@@ -1032,14 +1032,29 @@ export class PlatformPage implements OnInit {
    * Convierte el formato que usa la IA (Markdown: **negritas**, *cursivas*, viñetas, listas numeradas,
    * citas con >, títulos con #) en HTML. Primero se escapa todo el texto, así no se puede inyectar HTML.
    */
-  rich(markdown: string): string {
+  rich(markdown: string, sources: Row[] = []): string {
+    // Referencias [P3] / [6] → etiqueta con el nombre del proyecto o documento.
+    const refs = new Map<string, { label: string; kind: string }>();
+    for (const src of sources) {
+      refs.set(String(src['reference']), { label: String(src['title'] || ''), kind: src['type'] === 'project' ? 'project' : 'document' });
+    }
     const esc = (v: string) => v.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-    const inline = (v: string) => esc(v)
+    const tag = (line: string) => line.replace(/\[(P?\d+)\]/g, (all, ref: string) => {
+      const info = refs.get(ref);
+      if (!info) return ref.startsWith('P') ? '' : all;
+      // Si la frase ya dice el nombre, no se repite.
+      if (line.toLocaleLowerCase().replace(all.toLocaleLowerCase(), '').includes(info.label.toLocaleLowerCase())) return '';
+      return `\u0000${info.kind}\u0001${info.label}\u0002`;
+    });
+    const inline = (v: string) => esc(tag(v))
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/__(.+?)__/g, '<strong>$1</strong>')
       .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
-      .replace(/(^|[^_\w])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>');
+      .replace(/(^|[^_\w])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>')
+      .replace(/\u0000(\w+)\u0001([^\u0002]*)\u0002/g, (_m, kind: string, label: string) =>
+        `<span class="ref ref-${kind}">${kind === 'project' ? 'Proyecto' : 'Documento'}: ${label}</span>`)
+      .replace(/ +([.,;:])/g, '$1');
     const out: string[] = [];
     let list: 'ul' | 'ol' | null = null;
     const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
@@ -1072,28 +1087,47 @@ export class PlatformPage implements OnInit {
     this.asking = true;
     this.messages.push({ author: 'Tú', text: question });
     // Conversación previa (sin la pregunta actual) para que la IA entienda "¿y eso cómo lo hago?".
-    const history = this.messages.slice(0, -1).slice(-6).map(m => ({ author: m.author, text: m.text.split('\n\nFuentes:')[0] }));
+    const history = this.messages.slice(0, -1).slice(-6).map(m => ({ author: m.author, text: m.text.split('\n\n**Fuentes consultadas:**')[0] }));
+    const reply: { author: string; text: string; html?: string; pending?: boolean } = { author: 'Asistente', text: '', html: '', pending: true };
+    this.messages.push(reply);
+    let sources: Row[] = [];
+    let replySources: Row[] = [];
+    let notice = '';
+    let failure: Row | null = null;
+    let received = false;
     try {
-      // 1) IA (función Edge "asistente": ChatGPT o Gemini). 2) Si no está publicada, respuesta local con los datos del sistema.
-      const ai = await this.backend.callFunction<Row>('asistente', { question, mode: this.assistantMode, history });
-      let r: Row;
-      if (ai && ai.status === 401) {
+      // 1) IA en streaming: el texto aparece mientras Gemini lo escribe.
+      const connected = await this.backend.streamFunction('asistente', { question, mode: this.assistantMode, history, stream: true }, event => {
+        if (event.type === 'delta') { received = true; reply.text += event.text; reply.html = this.rich(reply.text); }
+        else if (event.type === 'final') { received = true; reply.text = event.answer || ''; sources = event.sources || []; notice = event.notice || ''; }
+        else if (event.type === 'done') { sources = event.sources || []; notice = event.notice || ''; }
+        else if (event.type === 'error') failure = event;
+        this.changeDetector.markForCheck();
+      });
+      if (failure && Number((failure as Row)['status']) === 401) {
         this.backend.setToken(null);
         await this.router.navigate(['/login'], { replaceUrl: true });
         throw new Error('Tu sesión terminó. Vuelve a iniciar sesión.');
-      } else if (ai && ai.status >= 200 && ai.status < 300) r = ai.body;
-      else if (ai && ai.status !== 404 && ai.status < 500) throw new Error(ai.body?.['message'] || 'No se pudo consultar.');
-      else r = await this.api.request<Row>('assistant/query.php', {}, { question, mode: this.assistantMode });
-      const sources = (r['sources'] || []) as Row[];
-      const text = r['answer'] + (sources.length ? '\n\n**Fuentes:**\n' +
-        sources.map(s => `- [${s['reference']}] ${s['title']}${s['version'] ? ' · v' + s['version'] : ''}`).join('\n') : '') +
-        (r['notice'] ? '\n\n_(' + r['notice'] + ')_' : '');
-      this.messages.push({ author: 'Asistente', text, html: this.rich(text) });
+      }
+      if (failure && Number((failure as Row)['status']) < 500) throw new Error((failure as Row)['message'] || 'No se pudo consultar.');
+      // 2) Si la función no está publicada o falló antes de responder: respuesta local con los datos del sistema.
+      if (!connected || !received) {
+        const r = await this.api.request<Row>('assistant/query.php', {}, { question, mode: this.assistantMode });
+        reply.text = r['answer'];
+        sources = r['sources'] || [];
+      }
+      reply.text += (sources.length ? '\n\n**Fuentes consultadas:**\n' + sources.map(s => s['type'] === 'project'
+          ? `- Proyecto «${s['title']}»` : `- Documento «${s['title']}»${s['version'] ? ' (versión ' + s['version'] + ')' : ''}${s['project_title'] ? ' del proyecto «' + s['project_title'] + '»' : ''}`).join('\n') : '') +
+        (notice ? '\n\n_(' + notice + ')_' : '');
+      replySources = sources;
     } catch (error) {
-      this.messages.push({ author: 'Asistente', text: this.message(error, 'No se pudo consultar.') });
+      reply.text = this.message(error, 'No se pudo consultar.');
     } finally {
+      reply.pending = false;
+      reply.html = this.rich(reply.text, replySources);
       this.asking = false;
       this.changeDetector.markForCheck();
     }
   }
+
 }

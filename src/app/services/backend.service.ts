@@ -105,6 +105,47 @@ export class BackendService {
     }
   }
 
+  /**
+   * Igual que callFunction, pero recibe la respuesta en partes (streaming, eventos "data: {json}").
+   * Devuelve false si no pudo conectarse, para que la app use el respaldo local.
+   */
+  async streamFunction(name: string, data: Params, onEvent: (event: any) => void, timeoutMs = 70000): Promise<boolean> {
+    if (this.mode !== 'supabase' || typeof fetch === 'undefined') return false;
+    const key = environment.supabaseKey;
+    const headers: Record<string, string> = { apikey: key, 'Content-Type': 'application/json' };
+    if (key.startsWith('eyJ')) headers['Authorization'] = `Bearer ${key}`;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    try {
+      const res = await fetch(environment.supabaseUrl.replace(/\/$/, '') + '/functions/v1/' + name, {
+        method: 'POST', headers, body: JSON.stringify({ ...data, token: this.token }), signal: abort.signal,
+      });
+      if (!res.ok || !res.body || !(res.headers.get('content-type') || '').includes('event-stream')) return false;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let cut: number;
+        while ((cut = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, cut);
+          buffer = buffer.slice(cut + 2);
+          for (const line of block.split('\n')) {
+            if (!line.startsWith('data:')) continue;
+            try { onEvent(JSON.parse(line.slice(5))); } catch { /* evento incompleto */ }
+          }
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Descarga un archivo: en PHP abre la URL; en Supabase recibe base64 y lo guarda. */
   async download(module: string, params: Record<string, string | number>): Promise<void> {
     if (this.mode === 'php') {

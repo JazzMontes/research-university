@@ -111,7 +111,7 @@ function buildMessages(ctx: Json, history: Json[]): Json[] {
     "Respondes SIEMPRE en español, claro y al grano. Usa viñetas o pasos cuando ayuden.",
     "",
     "DE DÓNDE SALE CADA RESPUESTA:",
-    "1) Datos del usuario y de sus proyectos, propuestas, actividades, hitos, equipo y documentos: usa SOLO el CONTEXTO AUTORIZADO (ya viene filtrado por sus permisos). Cita con [1], [2]… los fragmentos de documentos y con [P12] los datos del proyecto 12 (sus actividades [A#] e hitos [H#] se citan con el [P#] de su proyecto). Si ese dato no aparece en el contexto, dilo: NUNCA inventes nombres, fechas, calificaciones, avances ni contenido de documentos.",
+    "1) Datos del usuario y de sus proyectos, propuestas, actividades, hitos, equipo y documentos: usa SOLO el CONTEXTO AUTORIZADO (ya viene filtrado por sus permisos). Escribe SIEMPRE en el texto el NOMBRE del proyecto, actividad, hito o documento del que hablas (por ejemplo: «En tu proyecto Agua potable, la actividad Muestreo vence el 3 de diciembre»); nunca digas solo "P3" o "el fragmento 6". Al final de esa frase agrega la referencia: [1], [2]… para fragmentos de documentos y [P12] para datos del proyecto 12 (sus actividades e hitos también se citan con el [P#] de su proyecto); la app la convierte en una etiqueta con el nombre. Si ese dato no aparece en el contexto, dilo: NUNCA inventes nombres, fechas, calificaciones, avances ni contenido de documentos.",
     "2) Cómo usar la plataforma (dónde está un botón, cómo cancelar, cómo retirar a alguien, etc.): usa la GUÍA DE LA PLATAFORMA. Si el usuario no tiene permiso para algo, dile quién puede hacerlo.",
     general
       ? "3) Dudas generales (metodología de investigación, cómo redactar objetivos o un marco teórico, normas APA, estadística, conceptos de su tema, programación, organización del trabajo, etc.): respóndelas con tu conocimiento general aunque no estén en los documentos. Al final agrega una línea: «Nota: esta parte es conocimiento general, no viene de los documentos de la plataforma.» Si la duda depende de reglas de la universidad y no hay una fuente institucional en el contexto, responde en general y aclara que deben confirmarlo con Coordinación o el reglamento."
@@ -166,72 +166,119 @@ function requestBody(provider: string, model: string, messages: Json[]): Json {
   };
 }
 
-// Gemini se llama por su API nativa (generateContent): las claves nuevas "AQ." no funcionan
-// en la ruta compatible con OpenAI. También funciona con las claves "AIza".
-async function callGemini(key: string, messages: Json[]): Promise<{ answer: string; model: string }> {
+type OnDelta = (text: string) => void;
+
+// Ajuste de "pensamiento": es lo que más tarda. Para este asistente se pide el mínimo.
+function thinkingFor(model: string): Json {
+  if (/2\.5-flash/.test(model)) return { thinkingBudget: 0 };          // Gemini 2.5 Flash / Flash-Lite: sin pensar
+  if (/2\.5-pro/.test(model)) return { thinkingBudget: 128 };          // Pro no permite apagarlo
+  if (/gemini-(3|flash-latest|flash-lite-latest)/.test(model)) return { thinkingLevel: "minimal" }; // Gemini 3
+  return {};
+}
+
+/**
+ * Gemini por su API nativa y EN STREAMING (las claves nuevas "AQ." no funcionan en la ruta compatible
+ * con OpenAI). El texto se va entregando con onDelta conforme llega, así la app muestra las primeras
+ * palabras en 1-2 segundos en lugar de esperar la respuesta completa.
+ */
+async function callGemini(key: string, messages: Json[], onDelta: OnDelta): Promise<{ answer: string; model: string }> {
   const custom = (Deno.env.get("AI_MODEL") || "").trim();
-  // AI_MODEL va primero; si falla, se prueban los demás.
   const models = custom ? [custom, ...PROVIDERS.gemini.models.filter((m) => m !== custom)] : PROVIDERS.gemini.models;
   const system = messages.filter((m) => m.role === "system").map((m) => String(m.content)).join("\n\n");
   const contents = messages.filter((m) => m.role !== "system")
     .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: String(m.content) }] }));
-  let lastError = "";
-  const body = (model: string) => JSON.stringify({
+  const body = (model: string, withThinking: boolean) => JSON.stringify({
     systemInstruction: { parts: [{ text: system }] },
     contents,
     generationConfig: {
       temperature: 0.3,
       maxOutputTokens: 2048,
-      // Velocidad: Gemini 2.5 Flash "piensa" antes de responder y eso tarda; para este asistente no hace falta.
-      ...(/2\.5-flash/.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+      ...(withThinking && Object.keys(thinkingFor(model)).length ? { thinkingConfig: thinkingFor(model) } : {}),
     },
   });
   const started = Date.now();
+  let lastError = "";
   for (const model of models) {
-    if (Date.now() - started > 35000) break; // la app espera ~60 s en total
-    // Google responde 503 cuando el modelo está saturado: se reintenta y, si sigue igual, se usa el siguiente modelo.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 700));
+    if (Date.now() - started > 30000) break;
+    let withThinking = true;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      // Si Gemini no manda la primera palabra en 12 s, se corta y se prueba otro modelo.
+      const abort = new AbortController();
+      let timer = setTimeout(() => abort.abort(), 12000);
       let res: Response;
       try {
-        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-          body: body(model),
-          signal: AbortSignal.timeout(25000),
+          body: body(model, withThinking),
+          signal: abort.signal,
         });
       } catch (error) {
-        lastError = (error as Error)?.name === "TimeoutError" ? "Gemini tardó demasiado en responder" : "no hubo conexión con Gemini";
-        break;
+        clearTimeout(timer);
+        lastError = (error as Error)?.name === "AbortError" ? `Gemini (${model}) tardó demasiado en empezar a responder` : "no hubo conexión con Gemini";
+        break; // siguiente modelo
       }
-      const text = await res.text();
-      if (res.ok) {
+      if (!res.ok || !res.body) {
+        clearTimeout(timer);
+        const text = await res.text();
+        console.error("IA gemini", model, res.status, text.slice(0, 500));
+        let detail = "";
+        try { detail = String(JSON.parse(text)?.error?.message || "").slice(0, 160); } catch { /* sin detalle */ }
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("la clave AI_API_KEY de Gemini no es válida o no tiene permiso" + (detail ? `: ${detail}` : ""));
+        }
+        lastError = `Gemini (${model}) respondió ${res.status}` + (detail ? `: ${detail}` : "");
+        if (res.status === 400 && withThinking && /think/i.test(detail)) { withThinking = false; continue; } // modelo sin ese ajuste
+        if (res.status >= 500 && attempt === 0) { await new Promise((r) => setTimeout(r, 500)); continue; } // saturado: un reintento
+        break; // 400/404/429 o sigue saturado: siguiente modelo
+      }
+      // Lectura del stream (Server-Sent Events: líneas "data: {json}").
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "", answer = "", blocked = "";
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let cut: number;
+          while ((cut = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, cut).trim();
+            buffer = buffer.slice(cut + 1);
+            if (!line.startsWith("data:")) continue;
+            let data: Json;
+            try { data = JSON.parse(line.slice(5)); } catch { continue; }
+            if (data?.promptFeedback?.blockReason) blocked = "Gemini bloqueó la pregunta por sus filtros de seguridad";
+            const parts = (data?.candidates?.[0]?.content?.parts || []) as Json[];
+            const piece = parts.filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("");
+            if (piece) {
+              if (!answer) { clearTimeout(timer); timer = setTimeout(() => abort.abort(), 45000); } // ya empezó: más margen
+              answer += piece;
+              onDelta(piece);
+            }
+          }
+        }
+      } catch (error) {
+        if (!answer) { lastError = `Gemini (${model}) tardó demasiado en empezar a responder`; clearTimeout(timer); break; }
+        console.error("IA gemini stream cortado", model, error);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (answer.trim()) {
         console.log("IA gemini", model, `${Date.now() - started} ms`);
-        const data = JSON.parse(text);
-        const parts = (data?.candidates?.[0]?.content?.parts || []) as Json[];
-        const answer = parts.filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("").trim();
-        if (answer) return { answer, model };
-        lastError = data?.promptFeedback?.blockReason ? "Gemini bloqueó la pregunta por sus filtros de seguridad" : "Gemini devolvió una respuesta vacía";
-        break;
+        return { answer: answer.trim(), model };
       }
-      console.error("IA gemini", model, res.status, text.slice(0, 500));
-      let detail = "";
-      try { detail = String(JSON.parse(text)?.error?.message || "").slice(0, 160); } catch { /* sin detalle */ }
-      if (res.status === 401 || res.status === 403) {
-        throw new Error("la clave AI_API_KEY de Gemini no es válida o no tiene permiso" + (detail ? `: ${detail}` : ""));
-      }
-      lastError = `Gemini (${model}) respondió ${res.status}` + (detail ? `: ${detail}` : "");
-      if (res.status >= 500) continue;           // saturado o caído: reintentar
-      break;                                      // 400/404/429: probar el siguiente modelo
+      lastError = blocked || `Gemini (${model}) devolvió una respuesta vacía`;
+      break;
     }
   }
   throw new Error(lastError || "no se pudo usar Gemini");
 }
 
-async function callModel(messages: Json[]): Promise<{ answer: string; model: string }> {
+async function callModel(messages: Json[], onDelta: OnDelta = () => {}): Promise<{ answer: string; model: string }> {
   const key = (Deno.env.get("AI_API_KEY") || Deno.env.get("OPENAI_API_KEY") || Deno.env.get("GEMINI_API_KEY") || "").trim();
   const provider = detectProvider(key);
-  if (provider === "gemini" && !(Deno.env.get("AI_BASE_URL") || "").trim()) return callGemini(key, messages);
+  if (provider === "gemini" && !(Deno.env.get("AI_BASE_URL") || "").trim()) return callGemini(key, messages, onDelta);
   const url = (Deno.env.get("AI_BASE_URL") || "").trim() || PROVIDERS[provider].url;
   const custom = (Deno.env.get("AI_MODEL") || "").trim();
   const models = custom ? [custom] : PROVIDERS[provider].models;
@@ -253,7 +300,7 @@ async function callModel(messages: Json[]): Promise<{ answer: string; model: str
     if (res.ok) {
       const data = JSON.parse(text);
       const answer = String(data?.choices?.[0]?.message?.content || "").trim();
-      if (answer) return { answer, model };
+      if (answer) { onDelta(answer); return { answer, model }; }
       lastError = "el modelo devolvió una respuesta vacía";
       continue;
     }
@@ -271,6 +318,49 @@ function citedSources(answer: string, sources: Json[]): Json[] {
   return sources.filter((s) => answer.includes(`[${s.reference}]`));
 }
 
+/**
+ * Respuesta en streaming para la app. Eventos (una línea "data: {json}" cada uno):
+ *   delta {text}                  → pedazo de la respuesta de la IA
+ *   final {answer, sources, notice} → respuesta completa (modo local, sin IA)
+ *   done  {sources, model}        → la IA terminó
+ *   error {status, message}       → no se pudo (sesión vencida, base caída…)
+ */
+function streamReply(apikey: string, datos: Json, token: string, history: Json[]): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event: Json) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      const local = async (notice: string) => {
+        const r = await researchApi(apikey, "assistant/query.php", datos, token);
+        if (r.status === 200) send({ type: "final", answer: r.body.answer, sources: r.body.sources || [], notice, engine: "local" });
+        else send({ type: "error", status: r.status, message: r.body?.message });
+      };
+      let wrote = false;
+      try {
+        const ctx = await researchApi(apikey, "assistant/context.php", datos, token);
+        if (ctx.status !== 200) { send({ type: "error", status: ctx.status, message: ctx.body?.message }); return; }
+        const key = (Deno.env.get("AI_API_KEY") || Deno.env.get("OPENAI_API_KEY") || Deno.env.get("GEMINI_API_KEY") || "").trim();
+        if (!key) { await local("La IA no está configurada (falta el secreto AI_API_KEY). Respuesta generada con los datos del sistema."); return; }
+        try {
+          const { answer, model } = await callModel(buildMessages(ctx.body, history), (text) => { wrote = true; send({ type: "delta", text }); });
+          send({ type: "done", sources: citedSources(answer, ctx.body.sources || []), model });
+        } catch (error) {
+          if (wrote) send({ type: "done", sources: [], notice: "La respuesta se cortó antes de terminar." });
+          else await local(`No se pudo usar la IA (${(error as Error).message}). Respuesta generada con los datos del sistema.`);
+        }
+      } catch (error) {
+        console.error(error);
+        send({ type: "error", status: 503, message: "El asistente no está disponible en este momento. Intenta de nuevo." });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: { ...CORS, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
+  });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return reply(405, { message: "Método no permitido." });
@@ -281,6 +371,8 @@ Deno.serve(async (req: Request) => {
   const token = typeof input.token === "string" ? input.token : "";
   const datos: Json = { question: input.question, mode: input.mode || "ask" };
   if (input.project_id) datos.project_id = input.project_id;
+
+  if (input.stream === true) return streamReply(apikey, datos, token, Array.isArray(input.history) ? input.history : []);
 
   try {
     const ctx = await researchApi(apikey, "assistant/context.php", datos, token);

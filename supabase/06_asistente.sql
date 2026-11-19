@@ -211,7 +211,7 @@ begin
   scope := research.assistant_projects(u, d);
 
   if qn ~ '(pendiente|tarea|actividad|entrega|tengo que)' and qn !~ 'hito' then
-    select string_agg(format('• %s — %s — %s, fecha límite %s (%s) [P%s]', a.description, pr.title, research.status_label(a.status),
+    select string_agg(format('• %s — proyecto «%s» — %s, fecha límite %s (%s) [P%s]', a.description, pr.title, research.status_label(a.status),
              research.fmt_date(a.deadline), research.deadline_status(a.status, a.deadline), pr.id), E'\n' order by a.deadline)
       into part
       from research.activities a join research.projects pr on pr.id = a.project_id
@@ -221,25 +221,25 @@ begin
       'Actividades pendientes:' || E'\n' || part end || E'\n\n';
   end if;
   if qn ~ 'hito' then
-    select string_agg(format('• %s — %s — fecha objetivo %s — %s [P%s]', m.description, pr.title, research.fmt_date(m.target_date),
+    select string_agg(format('• %s — proyecto «%s» — fecha objetivo %s — %s [P%s]', m.description, pr.title, research.fmt_date(m.target_date),
              research.status_label(research.milestone_status(m.id)), pr.id), E'\n' order by m.target_date)
       into part
       from research.milestones m join research.projects pr on pr.id = m.project_id where m.project_id = any(scope);
     answer := answer || coalesce('Hitos:' || E'\n' || part, 'No hay hitos registrados en tus proyectos.') || E'\n\n';
   end if;
   if qn ~ '(objetivo|meta|proposito)' then
-    select string_agg(format('• %s: %s [P%s]', pr.title, coalesce(nullif(pr.objectives, ''), 'sin objetivos registrados'), pr.id), E'\n')
+    select string_agg(format('• Proyecto «%s»: %s [P%s]', pr.title, coalesce(nullif(pr.objectives, ''), 'sin objetivos registrados'), pr.id), E'\n')
       into part from research.projects pr where pr.id = any(scope);
     answer := answer || coalesce('Objetivos:' || E'\n' || part, 'No hay proyectos en tu alcance.') || E'\n\n';
   end if;
   if qn ~ '(participa|equipo|integrante|miembro|quien)' then
-    select string_agg(format('• %s: %s [P%s]', pr.title, (select string_agg(x.name || ' (' || research.role_label(x.role) || coalesce(', ' || t.project_role, '') || ')', '; ')
+    select string_agg(format('• Proyecto «%s»: %s [P%s]', pr.title, (select string_agg(x.name || ' (' || research.role_label(x.role) || coalesce(', ' || t.project_role, '') || ')', '; ')
              from research.participants t join research.users x on x.id = t.user_id where t.project_id = pr.id and t.is_active = 1), pr.id), E'\n')
       into part from research.projects pr where pr.id = any(scope);
     answer := answer || coalesce('Equipo de trabajo:' || E'\n' || part, 'No hay proyectos en tu alcance.') || E'\n\n';
   end if;
   if qn ~ '(avance|progreso|porcentaje)' then
-    select string_agg(format('• %s: %s de %s actividades completadas, %s de %s hitos alcanzados [P%s]', pr.title,
+    select string_agg(format('• Proyecto «%s»: %s de %s actividades completadas, %s de %s hitos alcanzados [P%s]', pr.title,
              (select count(*) from research.activities a where a.project_id = pr.id and a.status = 'completed'),
              (select count(*) from research.activities a where a.project_id = pr.id and a.status <> 'cancelled'),
              (select count(*) from research.milestones m where m.project_id = pr.id and research.milestone_status(m.id) = 'achieved'),
@@ -251,10 +251,10 @@ begin
     answer := answer || 'Propuestas:' || E'\n' || (ctx ->> 'proposals') || E'\n\n';
   end if;
   if jsonb_array_length(ctx -> 'fragments') > 0 then
-    answer := answer || 'Fragmentos relacionados en los documentos:' || E'\n';
+    answer := answer || 'En los documentos encontré:' || E'\n';
     for f in select distinct on (value ->> 'document_id') value from jsonb_array_elements(ctx -> 'fragments')
              order by value ->> 'document_id', (value ->> 'reference')::int limit 3 loop
-      answer := answer || format(E'[%s] %s: «%s»\n', f ->> 'reference', f ->> 'title', research.cut(regexp_replace(f ->> 'text', '\s+', ' ', 'g'), 450));
+      answer := answer || format(E'• Documento «%s»: «%s» [%s]\n', f ->> 'title', research.cut(regexp_replace(f ->> 'text', '\s+', ' ', 'g'), 450), f ->> 'reference');
     end loop;
   end if;
   if btrim(answer) = '' then
