@@ -1,0 +1,50 @@
+# Aplica los cambios de la base de datos en Supabase cada vez que subes (push)
+# un cambio en los archivos supabase/01..07 a main o master.
+# Los scripts se pueden ejecutar varias veces: crean lo que falta y recrean funciones, NO borran datos.
+# Todo vive en el esquema "research", así que puede compartir proyecto de Supabase con otra app.
+#
+# Secreto del repositorio (Settings → Secrets and variables → Actions → Secrets):
+#   SUPABASE_DB_URL  Cadena de conexión del "Session pooler" (Supabase → Connect → Session pooler), p. ej.
+#                    postgresql://postgres.xxxx:TU_CONTRASEÑA@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+#                    (La conexión "Direct" no funciona desde GitHub: es solo IPv6.)
+name: Actualizar base de datos (Supabase)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'supabase/0*.sql'
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-db
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      PGOPTIONS: '--client-min-messages=warning'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Comprobar secreto
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::error::Falta el secreto SUPABASE_DB_URL (Session pooler de Supabase)."; exit 1
+          fi
+
+      - name: Aplicar 01..07 en una sola transacción
+        run: |
+          # Si algo falla, se revierte todo y la base queda como estaba.
+          ARGS=()
+          for f in $(ls supabase/0[1-7]_*.sql | sort); do echo "→ $f"; ARGS+=(-f "$f"); done
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -q "${ARGS[@]}"
+
+      - name: Comprobar la API
+        run: |
+          R=$(psql "$SUPABASE_DB_URL" -tA -c \
+            "select public.research_api('api/health.php','GET','{}'::jsonb,null)::text")
+          echo "$R"
+          echo "$R" | grep -q '"status": 200' || { echo "::error::La API no respondió 200"; exit 1; }

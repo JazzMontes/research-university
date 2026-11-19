@@ -1,7 +1,7 @@
 node_modules/
 www/
 .angular/
-backend/config/database.local.php
-backend/config/ai.local.php
+herramientas/legado-xampp/backend/config/database.local.php
+herramientas/legado-xampp/backend/config/ai.local.php
 *.log
-backend/config/database.local.backup-*.php
+herramientas/legado-xampp/backend/config/database.local.backup-*.php

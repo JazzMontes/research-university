@@ -7,6 +7,10 @@
 name: Desplegar asistente de IA
 
 on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'supabase/functions/**'
   workflow_dispatch:
 
 jobs:
