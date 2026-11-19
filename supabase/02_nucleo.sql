@@ -25,7 +25,7 @@ returns text language sql immutable as $$
     when 'status' then 'Estado' when 'deadline' then 'Fecha límite' when 'target_date' then 'Fecha objetivo'
     when 'start_date' then 'Fecha de inicio' when 'end_date' then 'Fecha de término'
     when 'filename' then 'Archivo' when 'question' then 'Pregunta' when 'project_role' then 'Rol en el proyecto'
-    when 'reason' then 'Motivo' when 'comment' then 'Comentario' when 'email' then 'Correo'
+    when 'reason' then 'Motivo' when 'comment' then 'Comentario' when 'email' then 'Correo' when 'justification' then 'Justificación' when 'note' then 'Nota'
     when 'responsible_researcher_id' then 'Investigador responsable' when 'participant_id' then 'Responsable'
     when 'user_id' then 'Persona' when 'researcher_id' then 'Nuevo investigador' when 'reassign_to' then 'Quién recibe sus actividades'
     else null end, field);
@@ -147,7 +147,8 @@ $$;
 
 create or replace function research.public_user(u research.users)
 returns jsonb language sql stable as $$
-  select jsonb_build_object('id', u.id, 'name', u.name, 'username', u.username, 'role', u.role, 'status', u.status);
+  select jsonb_build_object('id', u.id, 'name', u.name, 'username', u.username, 'role', u.role, 'status', u.status,
+    'email', u.email, 'avatar', u.avatar, 'must_change_password', coalesce(u.must_change_password, 0) = 1);
 $$;
 
 create or replace function research.role_label(r text)
@@ -260,7 +261,8 @@ create or replace function research.project_lead(p research.projects, u research
 returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
 begin
-  if u.role <> 'researcher' or p.responsible_researcher_id <> u.id then
+  -- Coordinación también puede ser investigadora: administra SOLO los proyectos donde es responsable.
+  if u.role not in ('researcher', 'coordinator') or p.responsible_researcher_id <> u.id then
     perform research.fail(403, 'Solo el investigador responsable administra este proyecto.');
   end if;
 end $$;
@@ -284,7 +286,7 @@ set search_path = research, extensions, pg_temp as $$
 begin
   if not exists (select 1 from research.participants t join research.users u on u.id = t.user_id
                  where t.project_id = pid and t.user_id = uid and t.is_active = 1 and u.status = 'active'
-                   and u.role in ('student', 'researcher')) then
+                   and u.role in ('student', 'researcher', 'coordinator')) then
     perform research.fail(422, 'Selecciona un participante activo del proyecto.');
   end if;
 end $$;
@@ -293,8 +295,13 @@ create or replace function research.active_role(uid integer, r text)
 returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
 begin
-  perform 1 from research.users where id = uid and role = r and status = 'active' for update;
-  if not found then perform research.fail(422, 'Selecciona una cuenta activa con rol ' || lower(research.role_label(r)) || '.'); end if;
+  -- "researcher" incluye a Coordinación: también puede ser investigadora responsable.
+  perform 1 from research.users where id = uid and status = 'active'
+    and (role = r or (r = 'researcher' and role = 'coordinator')) for update;
+  if not found then
+    perform research.fail(422, case when r = 'researcher' then 'Selecciona una cuenta activa de investigador o de Coordinación.'
+                                    else 'Selecciona una cuenta activa con rol ' || lower(research.role_label(r)) || '.' end);
+  end if;
 end $$;
 
 create or replace function research.event_project(pid integer, actor integer, entity text, eid integer, act text, details jsonb default '{}'::jsonb)

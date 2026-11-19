@@ -14,6 +14,11 @@ export interface AuthUser {
   username: string;
   role: Role;
   status: 'active';
+  email?: string | null;
+  /** Foto de perfil como imagen pequeña (data URL). */
+  avatar?: string | null;
+  /** true si la contraseña la puso Coordinación y hay que cambiarla antes de usar la app. */
+  must_change_password?: boolean;
 }
 
 interface SessionResponse { user: AuthUser; token?: string; message?: string; }
@@ -58,6 +63,11 @@ export class AuthService {
       this.clearUser();
       throw this.explainError(error, true);
     }
+  }
+
+  /** Actualiza los datos de la sesión después de editar el perfil o cambiar la contraseña. */
+  updateUser(user: AuthUser): void {
+    if (this.user()?.id === user.id) this.currentUser.set({ ...this.user()!, ...user });
   }
 
   // Se consulta al recargar, navegar y durante actividad real; no hay latido permanente.

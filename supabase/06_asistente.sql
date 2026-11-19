@@ -149,7 +149,7 @@ begin
     where (
             (dd.kind = 'institutional' and not research.has(d, 'project_id'))
             or (dd.kind = 'institutional' and research.has(d, 'project_id') and q is not null)
-            or (dd.kind <> 'institutional' and dd.project_id = any(scope) and (dd.restricted = 0 or u.role = 'researcher'))
+            or (dd.kind <> 'institutional' and dd.project_id = any(scope) and (dd.restricted = 0 or u.role <> 'student'))
           )
       and (q is not null and c.tsv @@ q)
     order by score desc, dd.created_at desc, c.fragment
@@ -168,7 +168,7 @@ begin
       join research.document_chunks c on c.document_id = dd.id and c.fragment <= 2
       left join research.projects pr on pr.id = dd.project_id
       where dd.deleted_at is null and dd.kind <> 'institutional' and dd.project_id = any(scope)
-        and (dd.restricted = 0 or u.role = 'researcher')
+        and (dd.restricted = 0 or u.role <> 'student')
       order by dd.created_at desc, c.fragment limit 4
     loop
       n := n + 1;

@@ -147,14 +147,14 @@ export class BackendService {
   }
 
   /** Descarga un archivo: en PHP abre la URL; en Supabase recibe base64 y lo guarda. */
-  async download(module: string, params: Record<string, string | number>): Promise<void> {
+  async download(module: string, params: Record<string, string | number>, action = 'download'): Promise<void> {
     if (this.mode === 'php') {
       const query = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
-      window.open(`${this.phpBase}/${module}/download.php?${query}`, '_blank', 'noopener');
+      window.open(`${this.phpBase}/${module}/${action}.php?${query}`, '_blank', 'noopener');
       return;
     }
     const result = await this.call<{ filename: string; mime: string; content_base64: string; message?: string }>(
-      `${module}/download.php`, 'GET', params, 60000);
+      `${module}/${action}.php`, 'GET', params, 60000);
     if (result.status !== 200) throw new Error(result.body?.message || 'No se pudo descargar el archivo.');
     const binary = atob(result.body.content_base64);
     const bytes = new Uint8Array(binary.length);

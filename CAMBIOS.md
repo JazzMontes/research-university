@@ -83,3 +83,31 @@ Pendiente → Entregar → En revisión → Aceptar (**Completada**) o Pedir cam
 ### Gemini (configuración actual)
 - Funciona con las claves nuevas de Google AI Studio (`AQ.…`) y con las antiguas (`AIza…`). Se usa la API nativa de Gemini, porque las claves `AQ.` no funcionan en la ruta compatible con OpenAI.
 - Solo necesitas el secreto `AI_API_KEY` con tu clave. Modelos que prueba en orden: `gemini-2.5-flash`, `gemini-flash-latest`, `gemini-2.5-flash-lite` (o fija uno con `AI_MODEL`).
+
+## Versión 3.10: chat, perfil y contraseñas
+- **Asistente:** el chat tiene altura fija (solo se desplazan los mensajes), sin el selector de "Preguntar/Resumir…", con botón para adjuntar archivos (PDF, Word, Excel, imagen o texto, hasta 5 MB), historial de chats oculto que se abre con "☰ Historial", "Nuevo chat" y eliminar chat con confirmación. Al recargar se recupera el chat del día. Tus mensajes van en verde oscuro y los de la IA en blanco. El texto entre «» se muestra en ***negrita y cursiva*** y sin los símbolos.
+- **Mi perfil:** foto, nombre, correo y "Cambiar mi contraseña". Se entra desde el menú o tocando tu nombre arriba a la derecha.
+- **Contraseña temporal:** la que pone Coordinación al crear la cuenta o al restablecerla obliga a crear una propia al entrar.
+- **¿Olvidaste tu contraseña?:** en el acceso; llega un código de 6 números al correo de la cuenta (vence en 15 minutos).
+
+### Configurar el correo de recuperación (Brevo, gratis 300 correos al día)
+1. Crea una cuenta en https://www.brevo.com
+2. **Senders, Domains & Dedicated IPs → Senders → Add a sender**: agrega tu correo (por ejemplo tu Gmail) y confírmalo desde el correo que te llega.
+3. **SMTP & API → API Keys → Generate a new API key** y cópiala.
+4. Supabase → Edge Functions → Secrets, agrega:
+   - `BREVO_API_KEY` = la clave de Brevo
+   - `MAIL_FROM` = el correo que verificaste en el paso 2
+   - `MAIL_FROM_NAME` (opcional) = Research University
+5. Vuelve a publicar la función `asistente` con el `index.ts` nuevo.
+
+## Versión 3.11
+- **Inicio con gráficas:** donas de proyectos, propuestas y actividades por estado; avance de cada proyecto en curso; propuestas y proyectos de los últimos 6 meses; mis actividades, entregas por revisar y próximas fechas.
+- **Buscadores en vivo:** las propuestas se filtran mientras escribes (también proyectos, usuarios, y actividades/documentos dentro del proyecto).
+- **Listas con desplazamiento:** las listas largas quedan dentro de su cuadro.
+- **Campanita de notificaciones** junto a tu nombre: revisiones, entregas, tareas asignadas, fechas límite (avisa 2 días antes y si se retrasa), cierres, cambios de investigador, documentos nuevos.
+- **Coordinación como investigadora:** puede registrar propuestas (con justificación obligatoria) que se vuelven proyecto al instante, y ser investigadora responsable. Solo administra sus propios proyectos; en los demás sigue supervisando.
+- **Coordinación cambia al investigador responsable** de propuestas (y de proyectos, como antes).
+- **Solicitud de cambio de investigador:** el estudiante la pide con un motivo desde su propuesta o proyecto; Coordinación la aprueba (eligiendo al nuevo) o la rechaza.
+- **Archivo opcional en propuestas** al crearlas o corregirlas; al aprobarse pasa a Documentos del proyecto.
+- **Eliminar usuarios definitivamente** (con confirmación escribiendo ELIMINAR). Si la persona tenía historial, queda como «Usuario eliminado».
+- **Cancelar propuesta** ahora es un botón visible en el detalle de la propuesta.

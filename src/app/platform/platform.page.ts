@@ -5,7 +5,7 @@
  * Todas las acciones pasan por un único diálogo que valida, confirma lo irreversible
  * y explica qué va a pasar antes de guardar.
  */
-import { ChangeDetectorRef, Component, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, ElementRef, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -17,6 +17,7 @@ import { ApiService } from '../services/api.service';
 import { BackendService } from '../services/backend.service';
 import { extractOfficeText } from '../services/file-text';
 import { AuthService } from '../auth/auth.service';
+import { AppNotification, NotificationsService } from '../services/notifications.service';
 
 // Los datos llegan como JSON del servidor; se tratan como objetos libres para leerlos igual en código y plantilla.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,6 +48,9 @@ export interface Dialog {
   /** Devuelve el mensaje de éxito que se muestra al cerrar. */
   submit: (values: Row, file?: File) => Promise<string>;
 }
+
+interface ChatMessage { author: string; text: string; html?: string; pending?: boolean; attachment?: string; }
+interface ChatAttachment { name: string; mime: string; size: number; data?: string; text?: string; }
 
 const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,72}$/;
 
@@ -105,9 +109,43 @@ export class PlatformPage implements OnInit {
   sources: Row[] = [];
 
   question = '';
-  assistantMode = 'ask';
-  messages: { author: string; text: string; html?: string; pending?: boolean }[] = [];
+  messages: ChatMessage[] = [];
   asking = false;
+  /** Chat abierto (0 = chat nuevo sin guardar). */
+  chatId = 0;
+  chats: Row[] = [];
+  historyOpen = false;
+  attachment?: ChatAttachment;
+  attachBusy = false;
+  @ViewChild('chatScroll') chatScroll?: ElementRef<HTMLElement>;
+
+  // ---------- buscadores y campanita ----------
+  activityFilter = '';
+  documentFilter = '';
+  notifOpen = false;
+  private searchTimer?: ReturnType<typeof setTimeout>;
+
+  // ---------- Mi perfil ----------
+  profileName = '';
+  profileEmail = '';
+  profileAvatar = '';
+  profileSaving = false;
+
+  // ---------- primer inicio (contraseña temporal) ----------
+  firstPassword = { current: '', next: '', confirm: '' };
+  firstShown: Record<string, boolean> = {};
+  firstBusy = false;
+  firstError = '';
+
+  // ---------- recuperar contraseña desde el acceso ----------
+  loginMode: 'login' | 'forgot' | 'code' = 'login';
+  recoverId = '';
+  recoverCode = '';
+  recoverPassword = '';
+  showRecoverPassword = false;
+  recoverBusy = false;
+  recoverInfo = '';
+  loginInfo = '';
 
   // ---------- diálogo único ----------
   dialog?: Dialog;
@@ -120,7 +158,8 @@ export class PlatformPage implements OnInit {
   readonly todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
   constructor(private route: ActivatedRoute, private router: Router, public auth: AuthService,
-    private api: ApiService, private backend: BackendService, private changeDetector: ChangeDetectorRef) {}
+    private api: ApiService, private backend: BackendService, private changeDetector: ChangeDetectorRef,
+    public notifications: NotificationsService) {}
 
   // =====================================================================
   // Datos de la sesión
@@ -193,6 +232,7 @@ export class PlatformPage implements OnInit {
     this.project = undefined; this.activities = []; this.milestones = []; this.documents = []; this.history = [];
     this.versionsOf = 0; this.versions = [];
     this.activity = undefined; this.evidence = [];
+    this.activityFilter = ''; this.documentFilter = ''; this.notifOpen = false;
   }
 
   private async skipLoginIfActive(): Promise<void> {
@@ -204,6 +244,7 @@ export class PlatformPage implements OnInit {
 
   /** Carga la sección actual. soft = sin mostrar "Cargando" (después de guardar). */
   async load(soft = false): Promise<void> {
+    if (this.auth.user() && !this.auth.user()!.must_change_password) this.notifications.start();
     const revision = ++this.revision;
     const fresh = () => revision === this.revision;
     if (!soft) this.loading = true;
@@ -250,7 +291,20 @@ export class PlatformPage implements OnInit {
         case 'assistant':
           // Despierta la función de IA mientras la persona escribe su pregunta.
           void this.backend.callFunction('asistente', { ping: true }, 15000);
+          await this.loadChats();
+          // Al recargar se recupera el chat del día; con "Nuevo chat" se empieza de cero.
+          if (fresh() && !this.messages.length) {
+            const saved = this.savedChat();
+            if (saved && this.chats.some(c => Number(c['id']) === saved)) await this.openChat(saved, false);
+          }
           break;
+        case 'profile': {
+          const user = this.auth.user();
+          this.profileName = user?.name || '';
+          this.profileEmail = user?.email || '';
+          this.profileAvatar = user?.avatar || '';
+          break;
+        }
         case 'institutional': {
           const result = await this.api.request<Row>('institutional-documents/list.php');
           if (fresh()) this.sources = result['items'];
@@ -289,6 +343,7 @@ export class PlatformPage implements OnInit {
   async login(): Promise<void> {
     if (this.loginBusy) return;
     this.loginError = '';
+    this.loginInfo = '';
     this.auth.sessionMessage = '';
     if (!this.username.trim() || !this.password) { this.loginError = 'Escribe tu usuario y contraseña.'; return; }
     this.loginBusy = true;
@@ -314,6 +369,7 @@ export class PlatformPage implements OnInit {
     this.logoutBusy = true;
     try {
       await this.auth.logout();
+      this.notifications.stop();
       this.password = ''; this.username = ''; this.messages = []; this.dialog = undefined;
       await this.router.navigate(['/login'], { replaceUrl: true });
     } catch (error) {
@@ -329,6 +385,79 @@ export class PlatformPage implements OnInit {
   // =====================================================================
   setProposalFilter(value: string): void { this.filter = value; this.page = 1; void this.load(); }
   searchProposals(): void { this.page = 1; void this.load(); }
+  /** Busca mientras escribes (espera un instante para no consultar con cada tecla). */
+  liveSearchProposals(): void {
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    this.searchTimer = setTimeout(() => { this.page = 1; void this.load(true); }, 250);
+  }
+  private matches(text: string, term: string): boolean {
+    const norm = (v: string) => v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase();
+    return norm(text).includes(norm(term.trim()));
+  }
+  get visibleActivities(): Row[] {
+    return this.activityFilter.trim() ? this.activities.filter(a => this.matches(`${a['description']} ${a['participant_name']}`, this.activityFilter)) : this.activities;
+  }
+  get visibleDocuments(): Row[] {
+    return this.documentFilter.trim() ? this.documents.filter(d => this.matches(`${d['title']} ${d['filename'] || ''} ${d['uploaded_by_name'] || ''}`, this.documentFilter)) : this.documents;
+  }
+
+  // ---------- campanita ----------
+  toggleNotifications(): void {
+    this.notifOpen = !this.notifOpen;
+    if (this.notifOpen) void this.notifications.refresh();
+  }
+  async openNotification(n: AppNotification): Promise<void> {
+    this.notifOpen = false;
+    if (!n.read_at) void this.notifications.markRead(n.id);
+    if (!n.link) return;
+    const [path, query] = n.link.split('?');
+    const queryParams: Row = {};
+    for (const part of (query || '').split('&').filter(Boolean)) { const [k, v] = part.split('='); queryParams[k] = decodeURIComponent(v || ''); }
+    await this.router.navigate(['/app', ...path.split('/')], { queryParams });
+  }
+  timeAgo(value: unknown): string {
+    const ms = Date.now() - new Date(String(value)).getTime();
+    if (isNaN(ms)) return '';
+    const min = Math.round(ms / 60000);
+    if (min < 1) return 'ahora';
+    if (min < 60) return `hace ${min} min`;
+    const h = Math.round(min / 60);
+    if (h < 24) return `hace ${h} h`;
+    const d = Math.round(h / 24);
+    return d === 1 ? 'ayer' : `hace ${d} días`;
+  }
+
+  // ---------- gráficas del inicio ----------
+  private readonly chartColors: Record<string, Record<string, string>> = {
+    project: { active: '#e0b229', changes: '#3c7fd9', closing: '#f2d98b', finalized: '#2f9a5b', cancelled: '#d24f4f' },
+    proposal: { pending_researcher_review: '#e0b229', pending_coordinator: '#f2d98b', changes_requested: '#3c7fd9',
+      approved: '#2f9a5b', rejected: '#d24f4f', cancelled: '#eba3a3' },
+    activity: { pending: '#e0b229', in_review: '#f2d98b', changes: '#3c7fd9', completed: '#2f9a5b' },
+  };
+  /** Segmentos para la gráfica de dona (SVG con círculos: radio 15.915 → perímetro 100). */
+  donut(kind: 'project' | 'proposal' | 'activity'): { label: string; value: number; color: string; dash: string; offset: number; percent: number }[] {
+    const data: Row = this.dash['charts']?.[kind === 'project' ? 'projects' : kind === 'proposal' ? 'proposals' : 'activities'] || {};
+    const order = Object.keys(this.chartColors[kind]);
+    const total = order.reduce((sum, k) => sum + Number(data[k] || 0), 0);
+    let acc = 0;
+    return order.filter(k => Number(data[k] || 0) > 0).map(k => {
+      const value = Number(data[k]);
+      const percent = total ? value * 100 / total : 0;
+      const seg = { label: this.status(kind, k).label, value, color: this.chartColors[kind][k], dash: `${percent} ${100 - percent}`, offset: 25 - acc, percent: Math.round(percent) };
+      acc += percent;
+      return seg;
+    });
+  }
+  chartTotal(kind: 'project' | 'proposal' | 'activity'): number { return this.donut(kind).reduce((s, x) => s + x.value, 0); }
+  get monthly(): { label: string; proposals: number; projects: number; pHeight: number; jHeight: number }[] {
+    const rows: Row[] = this.dash['charts']?.['monthly'] || [];
+    const max = Math.max(1, ...rows.map(r => Math.max(Number(r['proposals']), Number(r['projects']))));
+    return rows.map(r => {
+      const [y, m] = String(r['month']).split('-').map(Number);
+      return { label: new Date(y, m - 1, 1).toLocaleDateString('es-MX', { month: 'short' }), proposals: Number(r['proposals']), projects: Number(r['projects']),
+        pHeight: Math.round(Number(r['proposals']) * 100 / max), jHeight: Math.round(Number(r['projects']) * 100 / max) };
+    });
+  }
   goPage(page: number): void { this.page = page; void this.load(); }
 
   get visibleProjects(): Row[] {
@@ -368,7 +497,17 @@ export class PlatformPage implements OnInit {
   // Permisos que la interfaz muestra (el servidor vuelve a validarlos)
   // =====================================================================
   get projectEditable(): boolean { return ['active', 'changes'].includes(this.project?.['status']); }
-  get isLead(): boolean { return this.role === 'researcher' && Number(this.project?.['responsible_researcher_id']) === this.me; }
+  /** Investigador o Coordinación que actúa como investigadora. */
+  get canResearch(): boolean { return this.role === 'researcher' || this.role === 'coordinator'; }
+  get isLead(): boolean { return this.canResearch && Number(this.project?.['responsible_researcher_id']) === this.me; }
+  get canRequestProjectChange(): boolean {
+    return this.isMember && !this.isLead && ['active', 'changes', 'closing'].includes(this.project?.['status']) && !this.project?.['change_request'];
+  }
+  get canRequestProposalChange(): boolean {
+    const p = this.proposal;
+    return !!p && this.isAuthor && Number(p['responsible_researcher_id']) !== this.me &&
+      !['approved', 'rejected', 'cancelled'].includes(p['status']) && !p['change_request'];
+  }
   get isMember(): boolean {
     return (this.project?.['participants'] || []).some((p: Row) => Number(p['user_id']) === this.me && Number(p['is_active']) === 1);
   }
@@ -381,7 +520,7 @@ export class PlatformPage implements OnInit {
   get canReviewProposal(): boolean {
     const p = this.proposal;
     if (!p) return false;
-    return (p['status'] === 'pending_researcher_review' && this.role === 'researcher' && Number(p['responsible_researcher_id']) === this.me) ||
+    return (p['status'] === 'pending_researcher_review' && this.canResearch && Number(p['responsible_researcher_id']) === this.me) ||
       (p['status'] === 'pending_coordinator' && this.role === 'coordinator');
   }
   get isAuthor(): boolean { return Number(this.proposal?.['author_id']) === this.me; }
@@ -398,7 +537,7 @@ export class PlatformPage implements OnInit {
     return '';
   }
 
-  get activityLead(): boolean { return this.role === 'researcher' && Number(this.activity?.['lead_id']) === this.me; }
+  get activityLead(): boolean { return this.canResearch && Number(this.activity?.['lead_id']) === this.me; }
   get activityMine(): boolean { return Number(this.activity?.['participant_id']) === this.me; }
   get activityEditable(): boolean { return ['active', 'changes'].includes(this.activity?.['project_status']); }
   get activityOpen(): boolean { return ['pending', 'in_review', 'changes'].includes(this.activity?.['status']); }
@@ -503,17 +642,94 @@ export class PlatformPage implements OnInit {
         fields.push({ key: 'responsible_researcher_id', label: 'Investigador responsable', type: 'select', required: true,
           options: await this.options('catalogs/researchers.php', {}), hint: 'Será quien revise tu propuesta y dirija el proyecto.' });
       }
+      if (this.role === 'coordinator') {
+        fields.push({ key: 'justification', label: 'Justificación', type: 'textarea', required: true,
+          hint: 'Explica por qué se aprueba directamente; quedará en el historial de la propuesta.' });
+      }
+      fields.push({ key: 'file', label: 'Archivo (opcional)', type: 'file', hint: 'PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB.' });
       this.openDialog({
-        title: 'Nueva propuesta', confirmLabel: 'Enviar propuesta', fields, values: {},
+        title: 'Nueva propuesta', confirmLabel: this.role === 'coordinator' ? 'Crear proyecto' : 'Enviar propuesta', fields, values: {},
         intro: this.role === 'student' ? 'Se enviará al investigador que elijas; después la revisa Coordinación.'
-          : 'Como investigador, tu propuesta pasa directo a Coordinación.',
-        submit: async values => {
-          const result = await this.post('proposals/create.php', values);
+          : this.role === 'researcher' ? 'Como investigador, tu propuesta pasa directo a Coordinación.'
+          : 'Como Coordinación, tu propuesta se aprueba en ese momento y se convierte en proyecto contigo como responsable.',
+        submit: async (values, file) => {
+          const body: Row = { ...values, ...(await this.fileBody(file)) };
+          delete body['file'];
+          const result = await this.post('proposals/create.php', body);
+          if (result['project_id']) { void this.router.navigate(['/app/projects', result['project_id']]); return 'Proyecto creado.'; }
           void this.router.navigate(['/app/proposals', result['proposal_id']]);
           return 'Propuesta enviada.';
         },
       });
     });
+  }
+
+  changeProposalResearcher(): void {
+    const p = this.proposal!;
+    void this.withOptions(async () => {
+      const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(p['responsible_researcher_id']));
+      this.openDialog({
+        title: 'Cambiar investigador responsable', confirmLabel: 'Cambiar', values: {},
+        intro: p['status'] === 'pending_researcher_review' ? 'La propuesta pasará a la bandeja del nuevo investigador para que la revise.' : undefined,
+        fields: [
+          { key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', required: true, options },
+          { key: 'reason', label: 'Motivo (opcional)', type: 'textarea' },
+        ],
+        submit: async values => { await this.post('proposals/change-researcher.php', { proposal_id: p['id'], ...values }); return 'Investigador actualizado.'; },
+      });
+    });
+  }
+
+  /** Estudiante o integrante: pide a Coordinación otro investigador responsable. */
+  requestResearcherChange(target: 'project' | 'proposal'): void {
+    const item = target === 'project' ? this.project! : this.proposal!;
+    void this.withOptions(async () => {
+      const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(item['responsible_researcher_id']));
+      this.openDialog({
+        title: 'Solicitar cambio de investigador', confirmLabel: 'Enviar solicitud', values: {},
+        intro: `Coordinación revisará tu solicitud. Mientras tanto, ${item['researcher_name']} sigue como responsable.`,
+        fields: [
+          { key: 'reason', label: '¿Por qué quieres cambiar de investigador?', type: 'textarea', required: true },
+          { key: 'proposed_researcher_id', label: 'Investigador que propones (opcional)', type: 'select', options },
+        ],
+        submit: async values => {
+          const body: Row = { reason: values['reason'], [target === 'project' ? 'project_id' : 'proposal_id']: item['id'] };
+          if (values['proposed_researcher_id']) body['proposed_researcher_id'] = values['proposed_researcher_id'];
+          await this.post('changes/request.php', body);
+          return 'Solicitud enviada a Coordinación.';
+        },
+      });
+    });
+  }
+
+  /** Coordinación resuelve una solicitud de cambio de investigador. */
+  reviewChangeRequest(request: Row): void {
+    void this.withOptions(async () => {
+      const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(request['current_researcher_id']));
+      this.openDialog({
+        title: 'Solicitud de cambio de investigador', confirmLabel: 'Guardar decisión',
+        values: { researcher_id: request['proposed_researcher_id'] ? String(request['proposed_researcher_id']) : '' },
+        intro: `${request['requester_name']} pide cambiar a ${request['current_name']} en «${request['target_title']}». Motivo: ${request['reason']}`,
+        fields: [
+          { key: 'decision', label: 'Decisión', type: 'choice', required: true, options: [
+            { value: 'approved', label: 'Aprobar y asignar al nuevo investigador' }, { value: 'rejected', label: 'Rechazar' }] },
+          { key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', options,
+            requiredWhen: v => v['decision'] === 'approved' },
+          { key: 'note', label: 'Nota para quien lo pidió', type: 'textarea', requiredWhen: v => v['decision'] === 'rejected' },
+        ],
+        submit: async values => {
+          const body: Row = { request_id: request['id'], decision: values['decision'], note: values['note'] };
+          if (values['decision'] === 'approved') body['researcher_id'] = values['researcher_id'];
+          await this.post('changes/review.php', body);
+          return values['decision'] === 'approved' ? 'Investigador cambiado.' : 'Solicitud rechazada.';
+        },
+      });
+    });
+  }
+
+  async downloadProposalFile(): Promise<void> {
+    try { await this.backend.download('proposals', { proposal_id: this.proposal!['id'] }, 'download-file'); }
+    catch (error) { this.say(this.message(error, 'No se pudo descargar el archivo.'), 'error'); }
   }
 
   reviewProposal(): void {
@@ -554,12 +770,19 @@ export class PlatformPage implements OnInit {
           options: await this.options('catalogs/researchers.php', {}),
           hint: 'Si lo cambias, la propuesta vuelve a revisarse desde el nuevo investigador.' });
       }
+      fields.push({ key: 'file', label: p['file'] ? 'Reemplazar archivo (opcional)' : 'Archivo (opcional)', type: 'file',
+        hint: p['file'] ? `Actual: ${p['file']['filename']}. Si subes otro, queda como nueva versión.` : 'PDF, Word, Excel, imagen o texto. Máximo 5 MB.' });
       this.openDialog({
         title: 'Corregir y reenviar', confirmLabel: 'Guardar y reenviar', fields,
         intro: p['returns_to'] === 'pending_coordinator' ? 'Al guardar, regresa a Coordinación.' : 'Al guardar, regresa al investigador responsable.',
         values: { title: p['title'], description: p['description'], objectives: p['objectives'],
           responsible_researcher_id: String(p['responsible_researcher_id']) },
-        submit: async values => { await this.post('proposals/update.php', { proposal_id: p['id'], ...values }); return 'Correcciones enviadas.'; },
+        submit: async (values, file) => {
+          const body: Row = { proposal_id: p['id'], ...values, ...(await this.fileBody(file)) };
+          delete body['file'];
+          await this.post('proposals/update.php', body);
+          return 'Correcciones enviadas.';
+        },
       });
     });
   }
@@ -585,7 +808,7 @@ export class PlatformPage implements OnInit {
 
   proposalEvent(action: string): string {
     return ({
-      created: 'Propuesta registrada', resubmit: 'Corregida y reenviada', review_approved: 'Aprobada',
+      created: 'Propuesta registrada', resubmit: 'Corregida y reenviada', researcher_changed: 'Cambio de investigador responsable', review_approved: 'Aprobada',
       review_changes_requested: 'Cambios solicitados', review_rejected: 'Rechazada', cancelled: 'Cancelada', reactivated: 'Reactivada',
       // Historial anterior a la versión 3:
       update: 'Correcciones guardadas', assign: 'Evaluador asignado', archived: 'Archivada', unarchived: 'Desarchivada',
@@ -942,10 +1165,10 @@ export class PlatformPage implements OnInit {
         { key: 'name', label: 'Nombre completo', type: 'text', required: true },
         { key: 'username', label: 'Usuario', type: 'text', required: true, hint: 'Sin espacios: letras, números, punto o guion.' },
         { key: 'email', label: 'Correo (opcional)', type: 'email' },
-        { key: 'password', label: 'Contraseña inicial', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número.' },
+        { key: 'password', label: 'Contraseña temporal', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número. La persona la cambiará al entrar por primera vez.' },
         { key: 'role', label: 'Rol', type: 'choice', required: true, options: this.roleOptions() },
       ],
-      submit: async values => { await this.post('users/create.php', values); return `Cuenta creada. Comparte el usuario «${values['username']}» y su contraseña.`; },
+      submit: async values => { await this.post('users/create.php', values); return `Cuenta creada. Comparte el usuario «${values['username']}» y su contraseña temporal; al entrar tendrá que crear la suya.`; },
     });
   }
 
@@ -970,11 +1193,25 @@ export class PlatformPage implements OnInit {
     });
   }
 
+  deleteUser(user: Row): void {
+    this.openDialog({
+      title: 'Eliminar usuario definitivamente', confirmLabel: 'Sí, eliminar para siempre', danger: true, values: {},
+      warning: `¿Segura que quieres eliminar a ${user['name']} (${user['username']})? Esto NO se puede deshacer: ya no podrá entrar y se borran sus datos personales. ` +
+        'Si participó en proyectos, su historial queda como «Usuario eliminado». Si solo quieres quitarle el acceso por un tiempo, mejor desactívala en Editar.',
+      fields: [{ key: 'confirm', label: `Escribe ELIMINAR para confirmar`, type: 'text', required: true }],
+      submit: async values => {
+        if (String(values['confirm']).trim().toUpperCase() !== 'ELIMINAR') throw new Error('Escribe ELIMINAR para confirmar.');
+        const result = await this.post('users/delete.php', { user_id: user['id'] });
+        return result['mode'] === 'deleted' ? 'Usuario eliminado.' : 'Usuario eliminado; su historial queda como «Usuario eliminado».';
+      },
+    });
+  }
+
   resetPassword(user: Row): void {
     this.openDialog({
-      title: `Nueva contraseña para ${user['name']}`, confirmLabel: 'Cambiar contraseña', values: {},
-      intro: 'Sus sesiones abiertas se cerrarán. Usa el ojo para revisar lo que escribiste antes de guardar.',
-      fields: [{ key: 'password', label: 'Nueva contraseña', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número.' }],
+      title: `Contraseña temporal para ${user['name']}`, confirmLabel: 'Asignar contraseña temporal', values: {},
+      intro: 'Es una contraseña temporal: sus sesiones se cierran y al entrar tendrá que crear la suya. Si la persona tiene correo registrado, también puede recuperarla sola desde «¿Olvidaste tu contraseña?».',
+      fields: [{ key: 'password', label: 'Contraseña temporal', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número.' }],
       submit: async values => { await this.post('users/reset-password.php', { user_id: user['id'], ...values }); return 'Contraseña actualizada.'; },
     });
   }
@@ -1057,6 +1294,7 @@ export class PlatformPage implements OnInit {
       .replace(/\s+([.,;:])/g, '$1').replace(/ {2,}/g, ' ').replace(/\s+(y|o)\s*([.,;:]|$)/g, '$2');
     const inline = (v: string) => esc(tag(v))
       .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/«([^»\n]+)»/g, '<strong><em>$1</em></strong>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/__(.+?)__/g, '<strong>$1</strong>')
       .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
@@ -1090,24 +1328,30 @@ export class PlatformPage implements OnInit {
   }
 
   async ask(): Promise<void> {
-    if (!this.question.trim() || this.asking) return;
-    const question = this.question.trim();
+    if ((!this.question.trim() && !this.attachment) || this.asking || this.attachBusy) return;
+    const attachment = this.attachment;
+    const question = this.question.trim() || `Revisa el archivo «${attachment!.name}» y dime de qué trata.`;
     this.question = '';
+    this.attachment = undefined;
     this.asking = true;
-    this.messages.push({ author: 'Tú', text: question });
+    this.messages.push({ author: 'Tú', text: question, html: this.rich(question), attachment: attachment?.name });
     // Conversación previa (sin la pregunta actual) para que la IA entienda "¿y eso cómo lo hago?".
     const history = this.messages.slice(0, -1).slice(-6).map(m => ({ author: m.author, text: m.text.split('\n\n**Fuentes consultadas:**')[0] }));
-    const reply: { author: string; text: string; html?: string; pending?: boolean } = { author: 'Asistente', text: '', html: '', pending: true };
+    const reply: ChatMessage = { author: 'Asistente', text: '', html: '', pending: true };
     this.messages.push(reply);
+    this.scrollChat(true);
     let sources: Row[] = [];
     let replySources: Row[] = [];
     let notice = '';
     let failure: Row | null = null;
     let received = false;
+    let answered = false;
     try {
       // 1) IA en streaming: el texto aparece mientras Gemini lo escribe.
-      const connected = await this.backend.streamFunction('asistente', { question, mode: this.assistantMode, history, stream: true }, event => {
-        if (event.type === 'delta') { received = true; reply.text += event.text; reply.html = this.rich(reply.text); }
+      const payload: Row = { question, mode: 'ask', history, stream: true };
+      if (attachment) payload['attachment'] = { name: attachment.name, mime: attachment.mime, data: attachment.data, text: attachment.text };
+      const connected = await this.backend.streamFunction('asistente', payload, event => {
+        if (event.type === 'delta') { received = true; reply.text += event.text; reply.html = this.rich(reply.text); this.scrollChat(); }
         else if (event.type === 'final') { received = true; reply.text = event.answer || ''; sources = event.sources || []; notice = event.notice || ''; }
         else if (event.type === 'done') {
           sources = event.sources || []; notice = event.notice || '';
@@ -1124,22 +1368,293 @@ export class PlatformPage implements OnInit {
       if (failure && Number((failure as Row)['status']) < 500) throw new Error((failure as Row)['message'] || 'No se pudo consultar.');
       // 2) Si la función no está publicada o falló antes de responder: respuesta local con los datos del sistema.
       if (!connected || !received) {
-        const r = await this.api.request<Row>('assistant/query.php', {}, { question, mode: this.assistantMode });
+        const r = await this.api.request<Row>('assistant/query.php', {}, { question, mode: 'ask' });
         reply.text = r['answer'];
         sources = r['sources'] || [];
+        if (attachment) notice = 'El archivo adjunto solo lo puede leer la IA, que no respondió esta vez.';
       }
       reply.text += (sources.length ? '\n\n**Fuentes consultadas:**\n' + sources.map(s => s['type'] === 'project'
           ? `- Proyecto «${s['title']}»` : `- Documento «${s['title']}»${s['version'] ? ' (versión ' + s['version'] + ')' : ''}${s['project_title'] ? ' del proyecto «' + s['project_title'] + '»' : ''}`).join('\n') : '') +
         (notice ? '\n\n_(' + notice + ')_' : '');
       replySources = sources;
+      answered = true;
     } catch (error) {
       reply.text = this.message(error, 'No se pudo consultar.');
     } finally {
       reply.pending = false;
       reply.html = this.rich(reply.text, replySources);
       this.asking = false;
+      this.scrollChat();
+      this.changeDetector.markForCheck();
+    }
+    if (answered) await this.saveExchange(question, reply.text, replySources, attachment?.name);
+  }
+
+  // ---------- historial de chats ----------
+  get chatTitle(): string {
+    return this.chats.find(c => Number(c['id']) === this.chatId)?.['title'] || (this.chatId ? 'Chat' : 'Nuevo chat');
+  }
+  private chatKey(): string { return `urpmp.chat.${this.me}`; }
+  private todayKey(): string { return new Date().toLocaleDateString('en-CA'); }
+  private savedChat(): number {
+    try {
+      const saved = JSON.parse(localStorage.getItem(this.chatKey()) || 'null');
+      return saved && saved.day === this.todayKey() ? Number(saved.id) || 0 : 0;
+    } catch { return 0; }
+  }
+  private rememberChat(id: number): void {
+    try {
+      if (id) localStorage.setItem(this.chatKey(), JSON.stringify({ id, day: this.todayKey() }));
+      else localStorage.removeItem(this.chatKey());
+    } catch { /* Sin almacenamiento local: el chat sigue en el historial. */ }
+  }
+
+  async loadChats(): Promise<void> {
+    try { this.chats = (await this.api.request<Row>('assistant/chats.php'))['items']; }
+    catch { this.chats = []; }
+    this.changeDetector.markForCheck();
+  }
+
+  async openChat(id: number, closePanel = true): Promise<void> {
+    if (this.asking) return;
+    try {
+      const result = await this.api.request<Row>('assistant/chat-messages.php', { chat_id: id });
+      this.messages = (result['items'] as Row[]).map(m => ({
+        author: m['author'] === 'user' ? 'Tú' : 'Asistente', text: m['text'], attachment: m['attachment'] || undefined,
+        html: this.rich(m['text'], m['sources'] || []) }));
+      this.chatId = id;
+      this.rememberChat(id);
+      if (closePanel) this.historyOpen = false;
+      this.scrollChat(true);
+    } catch (error) {
+      this.say(this.message(error, 'No se pudo abrir el chat.'), 'error');
+      if (this.chatId === id) this.newChat();
+    }
+    this.changeDetector.markForCheck();
+  }
+
+  newChat(): void {
+    if (this.asking) return;
+    this.messages = [];
+    this.chatId = 0;
+    this.attachment = undefined;
+    this.question = '';
+    this.historyOpen = false;
+    this.rememberChat(0);
+  }
+
+  deleteChat(chat: Row): void {
+    this.openDialog({
+      title: 'Eliminar chat', confirmLabel: 'Sí, eliminar', danger: true, values: {}, fields: [],
+      warning: `¿Segura que quieres eliminar «${chat['title']}»? Se borrará toda la conversación y no se puede recuperar.`,
+      submit: async () => {
+        await this.post('assistant/chat-delete.php', { chat_id: chat['id'] });
+        if (Number(chat['id']) === this.chatId) this.newChat();
+        await this.loadChats();
+        return 'Chat eliminado.';
+      },
+    });
+  }
+
+  private async saveExchange(question: string, answer: string, sources: Row[], attachment?: string): Promise<void> {
+    try {
+      const body: Row = { question, answer, sources, attachment: attachment || '' };
+      if (this.chatId) body['chat_id'] = this.chatId;
+      const result = await this.post('assistant/chat-save.php', body);
+      this.chatId = Number(result['chat_id']);
+      this.rememberChat(this.chatId);
+      await this.loadChats();
+    } catch { /* Si no se pudo guardar, la conversación sigue en pantalla. */ }
+  }
+
+  chatDay(value: unknown): string {
+    const d = new Date(String(value));
+    if (isNaN(d.getTime())) return '';
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return 'Hoy · ' + d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
+  }
+
+  /** Baja al último mensaje. Si la persona subió a leer algo, no la mueve (salvo al enviar). */
+  private scrollChat(force = false): void {
+    setTimeout(() => {
+      const box = this.chatScroll?.nativeElement;
+      if (!box) return;
+      if (force || box.scrollHeight - box.scrollTop - box.clientHeight < 160) box.scrollTop = box.scrollHeight;
+    });
+  }
+
+  async chooseAttachment(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { this.say(`«${file.name}» pesa más de 5 MB. Elige un archivo más ligero.`, 'error'); return; }
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const types: Record<string, string> = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+      txt: 'text/plain', csv: 'text/csv', md: 'text/markdown' };
+    this.attachBusy = true;
+    try {
+      if (ext === 'docx' || ext === 'xlsx') {
+        const text = await extractOfficeText(file);
+        if (!text.trim()) throw new Error('No se pudo leer el texto de ese archivo.');
+        this.attachment = { name: file.name, mime: 'text/plain', size: file.size, text };
+      } else if (types[ext]) {
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+          reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
+          reader.readAsDataURL(file);
+        });
+        this.attachment = { name: file.name, mime: types[ext], size: file.size, data };
+      } else {
+        throw new Error('Puedes adjuntar PDF, Word (.docx), Excel (.xlsx), imágenes o texto.');
+      }
+    } catch (error) {
+      this.say(this.message(error, 'No se pudo adjuntar el archivo.'), 'error');
+    } finally {
+      this.attachBusy = false;
       this.changeDetector.markForCheck();
     }
   }
+
+  chatKeydown(event: KeyboardEvent): void {
+    // Enter envía; Shift + Enter hace un salto de línea.
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void this.ask(); }
+  }
+
+  // =====================================================================
+  // Mi perfil
+  // =====================================================================
+  choosePhoto(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { this.say('Elige una foto JPG, PNG o WEBP.', 'error'); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      // Se recorta en cuadrado y se reduce a 256 px para que pese poco.
+      const side = Math.min(img.width, img.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 256;
+      canvas.getContext('2d')!.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 256, 256);
+      this.profileAvatar = canvas.toDataURL('image/jpeg', 0.85);
+      URL.revokeObjectURL(url);
+      this.changeDetector.markForCheck();
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); this.say('No se pudo abrir esa imagen.', 'error'); };
+    img.src = url;
+  }
+
+  async saveProfile(): Promise<void> {
+    if (this.profileSaving) return;
+    if (!this.profileName.trim()) { this.say('Escribe tu nombre.', 'error'); return; }
+    if (this.profileEmail.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(this.profileEmail.trim())) { this.say('Revisa tu correo.', 'error'); return; }
+    this.profileSaving = true;
+    try {
+      const result = await this.post('profile/update.php', { name: this.profileName.trim(), email: this.profileEmail.trim(), avatar: this.profileAvatar });
+      this.auth.updateUser(result['user']);
+      this.say('Perfil actualizado.');
+    } catch (error) {
+      this.say(this.message(error, 'No se pudo guardar tu perfil.'), 'error');
+    } finally {
+      this.profileSaving = false;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  changeMyPassword(): void {
+    this.openDialog({
+      title: 'Cambiar mi contraseña', confirmLabel: 'Cambiar contraseña', values: {},
+      intro: 'Tus sesiones en otros dispositivos se cerrarán; en este sigues dentro.',
+      fields: [
+        { key: 'current_password', label: 'Contraseña actual', type: 'password', required: true },
+        { key: 'new_password', label: 'Nueva contraseña', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número.' },
+      ],
+      submit: async values => {
+        const result = await this.post('profile/change-password.php', values);
+        this.auth.updateUser(result['user']);
+        return 'Contraseña actualizada.';
+      },
+    });
+  }
+
+  /** Primer inicio con contraseña temporal: se crea la propia antes de entrar. */
+  async submitFirstPassword(): Promise<void> {
+    if (this.firstBusy) return;
+    const { current, next, confirm } = this.firstPassword;
+    this.firstError = '';
+    if (!current || !next) { this.firstError = 'Completa las contraseñas.'; return; }
+    if (!PASSWORD_RULE.test(next)) { this.firstError = 'La nueva contraseña necesita de 8 a 72 caracteres, con mayúscula, minúscula y número.'; return; }
+    if (next !== confirm) { this.firstError = 'La confirmación no coincide con la nueva contraseña.'; return; }
+    this.firstBusy = true;
+    try {
+      const result = await this.post('profile/change-password.php', { current_password: current, new_password: next });
+      this.auth.updateUser(result['user']);
+      this.firstPassword = { current: '', next: '', confirm: '' };
+      this.firstShown = {};
+      this.say('¡Listo! Ya tienes tu propia contraseña.');
+      await this.load();
+    } catch (error) {
+      this.firstError = this.message(error, 'No se pudo cambiar la contraseña.');
+    } finally {
+      this.firstBusy = false;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  // =====================================================================
+  // Recuperar contraseña (pantalla de acceso)
+  // =====================================================================
+  startRecovery(): void {
+    this.loginMode = 'forgot';
+    this.recoverId = this.username.trim();
+    this.recoverInfo = ''; this.loginError = ''; this.loginInfo = '';
+  }
+  backToLogin(): void { this.loginMode = 'login'; this.recoverInfo = ''; this.loginError = ''; }
+
+  async requestCode(): Promise<void> {
+    if (this.recoverBusy) return;
+    if (!this.recoverId.trim()) { this.loginError = 'Escribe tu usuario o tu correo.'; return; }
+    this.recoverBusy = true; this.loginError = ''; this.recoverInfo = '';
+    try {
+      const result = await this.backend.callFunction<Row>('asistente', { action: 'password-reset', identifier: this.recoverId.trim() }, 30000);
+      if (!result) throw new Error('No se pudo conectar con el servicio de correo. Inténtalo más tarde o contacta a Coordinación.');
+      if (result.status >= 300) throw new Error(result.body?.['message'] || 'No se pudo enviar el código.');
+      this.recoverInfo = result.body?.['message'] || 'Revisa tu correo.';
+      this.loginMode = 'code';
+      this.recoverCode = ''; this.recoverPassword = '';
+    } catch (error) {
+      this.loginError = this.message(error, 'No se pudo enviar el código.');
+    } finally {
+      this.recoverBusy = false;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  async resetWithCode(): Promise<void> {
+    if (this.recoverBusy) return;
+    this.loginError = '';
+    if (!/^\d{6}$/.test(this.recoverCode.replace(/\s/g, ''))) { this.loginError = 'El código tiene 6 números.'; return; }
+    if (!PASSWORD_RULE.test(this.recoverPassword)) { this.loginError = 'La nueva contraseña necesita de 8 a 72 caracteres, con mayúscula, minúscula y número.'; return; }
+    this.recoverBusy = true;
+    try {
+      const result = await this.backend.call<Row>('auth/reset-password.php', 'POST',
+        { identifier: this.recoverId.trim(), code: this.recoverCode.replace(/\s/g, ''), password: this.recoverPassword }, 15000);
+      if (result.status >= 300) throw new Error(result.body?.['message'] || 'No se pudo cambiar la contraseña.');
+      this.loginMode = 'login';
+      this.username = this.recoverId.includes('@') ? '' : this.recoverId.trim();
+      this.password = '';
+      this.loginInfo = 'Contraseña actualizada. Ya puedes iniciar sesión.';
+    } catch (error) {
+      this.loginError = this.message(error, 'No se pudo cambiar la contraseña.');
+    } finally {
+      this.recoverBusy = false;
+      this.changeDetector.markForCheck();
+    }
+  }
+
 
 }

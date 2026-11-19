@@ -20,6 +20,24 @@ set search_path = research, extensions, pg_temp as $$
   join research.users x on x.id = h.actor_id;
 $$;
 
+-- Cambia al investigador responsable; el anterior sigue en el equipo como investigador.
+create or replace function research.project_set_researcher(p research.projects, uid integer, actor integer, why text default '')
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+begin
+  if p.status not in ('active', 'changes', 'closing') then perform research.fail(409, 'Reabre el proyecto antes de cambiar al responsable.'); end if;
+  if uid = p.responsible_researcher_id then perform research.fail(422, 'Esa persona ya es la responsable.'); end if;
+  perform research.active_role(uid, 'researcher');
+  update research.projects set responsible_researcher_id = uid, updated_at = now() where id = p.id;
+  update research.participants set project_role = 'Investigador'
+    where project_id = p.id and user_id = p.responsible_researcher_id and project_role = 'Investigador responsable';
+  insert into research.participants (project_id, user_id, project_role) values (p.id, uid, 'Investigador responsable')
+    on conflict (project_id, user_id) do update set is_active = 1, removed_at = null, project_role = 'Investigador responsable';
+  perform research.event_project(p.id, actor, 'project', p.id, 'change-researcher', jsonb_build_object(
+    'before', (select name from research.users where id = p.responsible_researcher_id),
+    'after', (select name from research.users where id = uid), 'reason', nullif(why, '')));
+end $$;
+
 -- ------------------------------------------------------------------
 create or replace function research.ep_projects(u research.users, act text, d jsonb, is_post boolean)
 returns jsonb language plpgsql
@@ -38,6 +56,9 @@ begin
                                                 and a.participant_id = t.user_id and a.status in ('pending', 'in_review', 'changes')))
                          order by t.is_active desc, x.name), '[]')
                        from research.participants t join research.users x on x.id = t.user_id where t.project_id = pid),
+      'change_request', (select to_jsonb(c) || jsonb_build_object('requester_name', x.name)
+                         from research.researcher_change_requests c join research.users x on x.id = c.requested_by
+                         where c.project_id = pid and c.status = 'pending' order by c.id desc limit 1),
       'last_closure', (select to_jsonb(c) || jsonb_build_object('requester_name', (select name from research.users where id = c.requested_by),
                                                                 'reviewer_name', (select name from research.users where id = c.reviewed_by))
                        from research.closures c where c.project_id = pid order by c.id desc limit 1))));
@@ -66,18 +87,7 @@ begin
   if u.role <> 'coordinator' then perform research.fail(403, 'Solo Coordinación puede hacer este cambio.'); end if;
 
   if act = 'change-researcher' then
-    if p.status not in ('active', 'changes', 'closing') then perform research.fail(409, 'Reabre el proyecto antes de cambiar al responsable.'); end if;
-    uid := research.req_id(d, 'researcher_id');
-    if uid = p.responsible_researcher_id then perform research.fail(422, 'Esa persona ya es la responsable.'); end if;
-    perform research.active_role(uid, 'researcher');
-    update research.projects set responsible_researcher_id = uid, updated_at = now() where id = pid;
-    -- El responsable anterior sigue en el equipo como investigador (no pierde acceso ni historial).
-    update research.participants set project_role = 'Investigador'
-      where project_id = pid and user_id = p.responsible_researcher_id and project_role = 'Investigador responsable';
-    insert into research.participants (project_id, user_id, project_role) values (pid, uid, 'Investigador responsable')
-      on conflict (project_id, user_id) do update set is_active = 1, removed_at = null, project_role = 'Investigador responsable';
-    perform research.event_project(pid, u.id, 'project', pid, 'change-researcher', jsonb_build_object(
-      'before', (select name from research.users where id = p.responsible_researcher_id), 'after', (select name from research.users where id = uid)));
+    perform research.project_set_researcher(p, research.req_id(d, 'researcher_id'), u.id, research.opt_text(d, 'reason', 2000));
   elsif act = 'cancel' then
     if p.status in ('finalized', 'cancelled') then perform research.fail(409, 'El proyecto ya está ' || case p.status when 'cancelled' then 'cancelado.' else 'completado.' end); end if;
     v_reason := research.req_text(d, 'reason', 2000);
@@ -89,7 +99,7 @@ begin
   elsif act = 'reopen' then
     -- Corrige un cierre o una cancelación hechos por error.
     if p.status not in ('finalized', 'cancelled') then perform research.fail(409, 'El proyecto ya está abierto.'); end if;
-    if not exists (select 1 from research.users where id = p.responsible_researcher_id and role = 'researcher' and status = 'active') then
+    if not exists (select 1 from research.users where id = p.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
       perform research.fail(409, 'El investigador responsable ya no está activo. Reactiva su cuenta o, después de reabrir, cambia al responsable.');
     end if;
     v_reason := research.req_text(d, 'reason', 2000);
@@ -119,8 +129,8 @@ begin
 
   if act = 'add' then
     v_role := research.opt_text(d, 'project_role', 80);
-    perform 1 from research.users where id = uid and role in ('student', 'researcher') and status = 'active' for update;
-    if not found then perform research.fail(422, 'Solo se pueden agregar estudiantes o investigadores con cuenta activa.'); end if;
+    perform 1 from research.users where id = uid and role in ('student', 'researcher', 'coordinator') and status = 'active' for update;
+    if not found then perform research.fail(422, 'Solo se pueden agregar cuentas activas.'); end if;
     if exists (select 1 from research.participants where project_id = pid and user_id = uid and is_active = 1) then
       perform research.fail(409, 'Esa persona ya está en el equipo.');
     end if;

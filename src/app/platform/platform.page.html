@@ -9,6 +9,7 @@
         <p class="slogan">Investiga hoy,<br>construye un mejor mañana.</p>
       </section>
       <section class="login-panel">
+        @if (loginMode === 'login') {
         <form class="login-card" (ngSubmit)="login()" [attr.aria-busy]="loginBusy">
           <h2>Bienvenido de nuevo</h2><p>Continúa con tu investigación.</p>
           <label for="username">Usuario</label>
@@ -19,17 +20,85 @@
             <input id="password" name="password" [type]="showLoginPassword ? 'text' : 'password'" autocomplete="current-password"
               [(ngModel)]="password" placeholder="Tu contraseña" required [disabled]="loginBusy">
             <button type="button" class="eye" (click)="showLoginPassword = !showLoginPassword"
-              [attr.aria-label]="showLoginPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="showLoginPassword">
-              @if (showLoginPassword) {
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
-              } @else {
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1A9.8 9.8 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>
-              }
+              [attr.aria-label]="showLoginPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="!!showLoginPassword">
+              <ng-container [ngTemplateOutlet]="showLoginPassword ? eyeOn : eyeOff"></ng-container>
             </button>
           </div>
-          <p class="muted">¿Necesitas una cuenta o restablecer tu contraseña? Contacta a Coordinación.</p>
+          <p class="login-links"><button type="button" class="link-button" (click)="startRecovery()">¿Olvidaste tu contraseña?</button></p>
+          @if (loginInfo) { <p class="ok-box" role="status">{{ loginInfo }}</p> }
           @if (loginError || auth.sessionMessage) { <p class="error" role="alert">{{ loginError || auth.sessionMessage }}</p> }
           <button class="primary wide" type="submit" [disabled]="loginBusy">{{ loginBusy ? 'Iniciando sesión…' : 'Iniciar sesión →' }}</button>
+          <p class="muted">¿No tienes cuenta? Coordinación te la crea y te da una contraseña temporal.</p>
+        </form>
+        } @else if (loginMode === 'forgot') {
+        <form class="login-card" (ngSubmit)="requestCode()" [attr.aria-busy]="recoverBusy">
+          <h2>Recuperar contraseña</h2><p>Te enviaremos un código de 6 números al correo de tu cuenta.</p>
+          <label for="recover-id">Usuario o correo</label>
+          <input id="recover-id" name="recoverId" autocapitalize="none" spellcheck="false" [(ngModel)]="recoverId" placeholder="Tu usuario o tu correo" [disabled]="recoverBusy">
+          @if (loginError) { <p class="error" role="alert">{{ loginError }}</p> }
+          <button class="primary wide" type="submit" [disabled]="recoverBusy">{{ recoverBusy ? 'Enviando…' : 'Enviarme el código' }}</button>
+          <p class="login-links"><button type="button" class="link-button" (click)="backToLogin()">← Volver a iniciar sesión</button></p>
+          <p class="muted">Si tu cuenta no tiene correo registrado, pide a Coordinación una contraseña temporal.</p>
+        </form>
+        } @else {
+        <form class="login-card" (ngSubmit)="resetWithCode()" [attr.aria-busy]="recoverBusy">
+          <h2>Crea tu nueva contraseña</h2>
+          @if (recoverInfo) { <p class="ok-box" role="status">{{ recoverInfo }}</p> }
+          <label for="recover-code">Código del correo</label>
+          <input id="recover-code" name="recoverCode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" [(ngModel)]="recoverCode" placeholder="123456" [disabled]="recoverBusy">
+          <label for="recover-pass">Nueva contraseña</label>
+          <div class="password-box">
+            <input id="recover-pass" name="recoverPassword" [type]="showRecoverPassword ? 'text' : 'password'" autocomplete="new-password"
+              [(ngModel)]="recoverPassword" [disabled]="recoverBusy">
+            <button type="button" class="eye" (click)="showRecoverPassword = !showRecoverPassword"
+              [attr.aria-label]="showRecoverPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="!!showRecoverPassword">
+              <ng-container [ngTemplateOutlet]="showRecoverPassword ? eyeOn : eyeOff"></ng-container>
+            </button>
+          </div>
+          @if (recoverPassword) { <small class="strength" [class.ok]="passwordOk(recoverPassword)">{{ passwordOk(recoverPassword) ? '✓ Contraseña válida' : 'Aún no cumple: 8+ caracteres, mayúscula, minúscula y número' }}</small> }
+          @if (loginError) { <p class="error" role="alert">{{ loginError }}</p> }
+          <button class="primary wide" type="submit" [disabled]="recoverBusy">{{ recoverBusy ? 'Guardando…' : 'Guardar contraseña' }}</button>
+          <p class="login-links"><button type="button" class="link-button" (click)="loginMode = 'forgot'">¿No te llegó? Pedir otro código</button>
+            <button type="button" class="link-button" (click)="backToLogin()">Cancelar</button></p>
+        </form>
+        }
+      </section>
+    </div>
+  } @else if (auth.user()?.must_change_password) {
+    <div class="login-layout single">
+      <section class="login-panel">
+        <form class="login-card" (ngSubmit)="submitFirstPassword()" [attr.aria-busy]="firstBusy">
+          <h2>¡Hola, {{ firstName }}! Crea tu contraseña</h2>
+          <p>Entraste con una contraseña temporal que te dio Coordinación. Para proteger tu cuenta, crea una que solo tú conozcas.</p>
+          <label for="first-current">Contraseña temporal</label>
+          <div class="password-box">
+            <input id="first-current" name="firstCurrent" [type]="firstShown['current'] ? 'text' : 'password'" autocomplete="current-password" [(ngModel)]="firstPassword.current">
+            <button type="button" class="eye" (click)="firstShown['current'] = !firstShown['current']"
+              [attr.aria-label]="firstShown['current'] ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="!!firstShown['current']">
+              <ng-container [ngTemplateOutlet]="firstShown['current'] ? eyeOn : eyeOff"></ng-container>
+            </button>
+          </div>
+          <label for="first-next">Nueva contraseña</label>
+          <div class="password-box">
+            <input id="first-next" name="firstNext" [type]="firstShown['next'] ? 'text' : 'password'" autocomplete="new-password" [(ngModel)]="firstPassword.next">
+            <button type="button" class="eye" (click)="firstShown['next'] = !firstShown['next']"
+              [attr.aria-label]="firstShown['next'] ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="!!firstShown['next']">
+              <ng-container [ngTemplateOutlet]="firstShown['next'] ? eyeOn : eyeOff"></ng-container>
+            </button>
+          </div>
+          @if (firstPassword.next) { <small class="strength" [class.ok]="passwordOk(firstPassword.next)">{{ passwordOk(firstPassword.next) ? '✓ Contraseña válida' : 'Aún no cumple: 8+ caracteres, mayúscula, minúscula y número' }}</small> }
+          <label for="first-confirm">Escríbela otra vez</label>
+          <div class="password-box">
+            <input id="first-confirm" name="firstConfirm" [type]="firstShown['confirm'] ? 'text' : 'password'" autocomplete="new-password" [(ngModel)]="firstPassword.confirm">
+            <button type="button" class="eye" (click)="firstShown['confirm'] = !firstShown['confirm']"
+              [attr.aria-label]="firstShown['confirm'] ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="!!firstShown['confirm']">
+              <ng-container [ngTemplateOutlet]="firstShown['confirm'] ? eyeOn : eyeOff"></ng-container>
+            </button>
+          </div>
+          @if (firstPassword.confirm && firstPassword.confirm !== firstPassword.next) { <small class="strength">No coincide con la nueva contraseña.</small> }
+          @if (firstError) { <p class="error" role="alert">{{ firstError }}</p> }
+          <button class="primary wide" type="submit" [disabled]="firstBusy">{{ firstBusy ? 'Guardando…' : 'Guardar y entrar →' }}</button>
+          <p class="login-links"><button type="button" class="link-button" (click)="logout()">Salir</button></p>
         </form>
       </section>
     </div>
@@ -50,7 +119,31 @@
         <header class="topbar">
           <button type="button" class="menu-button" (click)="menuOpen = !menuOpen" aria-label="Abrir menú" [attr.aria-expanded]="menuOpen">☰</button>
           <span class="breadcrumb">{{ sectionTitle }}</span>
-          <div class="profile"><span class="avatar">{{ initials }}</span><div><strong>{{ userName }}</strong><small class="profile-role">{{ roleLabel }}</small></div></div>
+          <div class="bell-wrap">
+            <button type="button" class="bell" (click)="toggleNotifications()" [attr.aria-expanded]="notifOpen"
+              [attr.aria-label]="notifications.unread() ? notifications.unread() + ' notificaciones sin leer' : 'Notificaciones'">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8M10.3 20a2 2 0 0 0 3.4 0"/></svg>
+              @if (notifications.unread()) { <span class="bell-count">{{ notifications.unread() > 99 ? '99+' : notifications.unread() }}</span> }
+            </button>
+            @if (notifOpen) {
+              <button type="button" class="bell-scrim" aria-label="Cerrar notificaciones" (click)="notifOpen = false"></button>
+              <section class="bell-panel" aria-label="Notificaciones">
+                <header><strong>Notificaciones</strong>
+                  @if (notifications.unread()) { <button type="button" class="link-button" (click)="notifications.markRead()">Marcar todas como leídas</button> }</header>
+                <div class="bell-list">
+                  @for (n of notifications.items(); track n.id) {
+                    <button type="button" class="bell-item" [class.unread]="!n.read_at" (click)="openNotification(n)">
+                      <span class="dot" [class]="'dot tone-' + n.tone"></span>
+                      <span class="bell-text"><strong>{{ n.title }}</strong>@if (n.body) { <small class="bell-body">{{ n.body }}</small> }<small>{{ timeAgo(n.created_at) }}</small></span>
+                    </button>
+                  } @empty { <p class="muted bell-empty">No tienes notificaciones.</p> }
+                </div>
+              </section>
+            }
+          </div>
+          <a class="profile" routerLink="/app/profile" title="Mi perfil">
+            @if (auth.user()?.avatar) { <img class="avatar" [src]="auth.user()!.avatar" alt=""> } @else { <span class="avatar">{{ initials }}</span> }
+            <div><strong>{{ userName }}</strong><small class="profile-role">{{ roleLabel }}</small></div></a>
         </header>
 
         @if (notice) {
@@ -85,41 +178,128 @@
             }
           </section>
 
-          @if (role !== 'coordinator') {
+          @if (role === 'coordinator' && dash['change_requests']?.length) {
             <section class="panel">
-              <h2>Mis actividades</h2>
-              @for (a of dash['my_activities'] || []; track a.id) {
-                <a class="list-row" [routerLink]="['/app/activities', a.id]">
-                  <div><strong>{{ a.description }}</strong><small>{{ a.project_title }} · vence {{ date(a.deadline) }}</small></div>
-                  @if (a.deadline_status !== 'Normal') { <span class="badge" [class]="'badge tone-' + deadlineTone(a.deadline_status)">{{ a.deadline_status }}</span> }
-                  <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
-                </a>
-              } @empty { <p class="muted">No tienes actividades pendientes. ¡Estás al día!</p> }
+              <h2>Solicitudes de cambio de investigador</h2>
+              <div class="scroll-box short">
+                @for (r of dash['change_requests']; track r.id) {
+                  <div class="list-row">
+                    <div><strong>{{ r.target_title }}</strong>
+                      <small>{{ r.requester_name }} pide cambiar a {{ r.current_name }}{{ r.proposed_name ? ' por ' + r.proposed_name : '' }} · «{{ r.reason }}»</small></div>
+                    <div class="row-actions"><a class="text-button" [routerLink]="['/app', r.link]">Ver</a>
+                      <button type="button" class="secondary small" (click)="reviewChangeRequest(r)">Resolver</button></div>
+                  </div>
+                }
+              </div>
             </section>
           }
-          @if (role === 'researcher') {
-            <section class="panel">
-              <h2>Entregas por revisar</h2>
-              @for (a of dash['to_review'] || []; track a.id) {
-                <a class="list-row" [routerLink]="['/app/activities', a.id]">
-                  <div><strong>{{ a.description }}</strong><small>{{ a.participant_name }} · {{ a.project_title }}</small></div>
-                  <span class="badge tone-progress">Revisar</span>
-                </a>
-              } @empty { <p class="muted">No hay entregas esperando tu revisión.</p> }
-            </section>
-          }
-          @if (role === 'coordinator' && !dash['todo']?.length) { <section class="panel"><p class="muted">No hay propuestas ni cierres esperando tu decisión.</p></section> }
+
+          <!-- Gráficas -->
+          <section class="charts">
+            @for (kind of ['project', 'proposal', 'activity']; track kind) {
+              <div class="chart-card">
+                <h3>{{ kind === 'project' ? 'Proyectos' : kind === 'proposal' ? 'Propuestas' : 'Actividades' }}</h3>
+                @if (chartTotal($any(kind))) {
+                  <div class="donut-wrap">
+                    <svg viewBox="0 0 42 42" class="donut" role="img" [attr.aria-label]="(kind === 'project' ? 'Proyectos' : kind === 'proposal' ? 'Propuestas' : 'Actividades') + ' por estado'">
+                      <circle cx="21" cy="21" r="15.915" fill="none" stroke="#edf3ef" stroke-width="5"></circle>
+                      @for (seg of donut($any(kind)); track seg.label) {
+                        <circle cx="21" cy="21" r="15.915" fill="none" [attr.stroke]="seg.color" stroke-width="5"
+                          [attr.stroke-dasharray]="seg.dash" [attr.stroke-dashoffset]="seg.offset"><title>{{ seg.label }}: {{ seg.value }}</title></circle>
+                      }
+                      <text x="21" y="20.5" text-anchor="middle" class="donut-total">{{ chartTotal($any(kind)) }}</text>
+                      <text x="21" y="26" text-anchor="middle" class="donut-label">total</text>
+                    </svg>
+                    <ul class="legend">
+                      @for (seg of donut($any(kind)); track seg.label) {
+                        <li><span class="dot" [style.background]="seg.color"></span>{{ seg.label }}<strong>{{ seg.value }}</strong></li>
+                      }
+                    </ul>
+                  </div>
+                } @else { <p class="muted">Todavía no hay datos.</p> }
+              </div>
+            }
+          </section>
+
+          <section class="charts two">
+            <div class="chart-card">
+              <h3>Avance de proyectos en curso</h3>
+              <div class="scroll-box short">
+                @for (p of dash['charts']?.progress || []; track p.id) {
+                  <a class="progress-row" [routerLink]="['/app/projects', p.id]">
+                    <span class="progress-name">{{ p.title }}</span>
+                    <span class="bar"><span class="bar-fill" [style.width.%]="p.percent"></span></span>
+                    <strong>{{ p.percent }} %</strong>
+                  </a>
+                } @empty { <p class="muted">No hay proyectos en curso.</p> }
+              </div>
+              @if (+(dash['charts']?.overdue || 0)) { <p class="late">⚠ {{ dash['charts'].overdue }} actividad(es) retrasada(s) en tus proyectos.</p> }
+            </div>
+            <div class="chart-card">
+              <h3>Últimos 6 meses</h3>
+              <div class="month-chart">
+                @for (m of monthly; track m.label) {
+                  <div class="month">
+                    <div class="month-bars">
+                      <span class="mbar proposals" [style.height.%]="m.pHeight" [title]="m.proposals + ' propuestas'"></span>
+                      <span class="mbar projects" [style.height.%]="m.jHeight" [title]="m.projects + ' proyectos'"></span>
+                    </div>
+                    <small>{{ m.label }}</small>
+                  </div>
+                }
+              </div>
+              <ul class="legend inline"><li><span class="dot" style="background:#7fb5a6"></span>Propuestas</li><li><span class="dot" style="background:#164b47"></span>Proyectos creados</li></ul>
+            </div>
+          </section>
+
+          <section class="charts two">
+            <div class="chart-card">
+              <h3>Mis actividades</h3>
+              <div class="scroll-box short">
+                @for (a of dash['my_activities'] || []; track a.id) {
+                  <a class="list-row" [routerLink]="['/app/activities', a.id]">
+                    <div><strong>{{ a.description }}</strong><small>{{ a.project_title }} · vence {{ date(a.deadline) }}</small></div>
+                    @if (a.deadline_status !== 'Normal') { <span class="badge" [class]="'badge tone-' + deadlineTone(a.deadline_status)">{{ a.deadline_status }}</span> }
+                    <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
+                  </a>
+                } @empty { <p class="muted">No tienes actividades pendientes. ¡Estás al día!</p> }
+              </div>
+            </div>
+            <div class="chart-card">
+              @if (canResearch) {
+                <h3>Entregas por revisar</h3>
+                <div class="scroll-box short">
+                  @for (a of dash['to_review'] || []; track a.id) {
+                    <a class="list-row" [routerLink]="['/app/activities', a.id]">
+                      <div><strong>{{ a.description }}</strong><small>{{ a.participant_name }} · {{ a.project_title }}</small></div>
+                      <span class="badge tone-progress">Revisar</span>
+                    </a>
+                  } @empty { <p class="muted">No hay entregas esperando tu revisión.</p> }
+                </div>
+              } @else {
+                <h3>Próximas fechas límite</h3>
+                <div class="scroll-box short">
+                  @for (a of dash['charts']?.upcoming || []; track a.id) {
+                    <a class="list-row" [routerLink]="['/app/activities', a.id]">
+                      <div><strong>{{ a.description }}</strong><small>{{ a.project_title }}</small></div>
+                      <span class="badge tone-progress">{{ date(a.deadline) }}</span>
+                    </a>
+                  } @empty { <p class="muted">Nada vence en las próximas dos semanas.</p> }
+                </div>
+              }
+            </div>
+          </section>
 
         <!-- ========================= PROPUESTAS ========================= -->
         } @else if (section === 'proposals' && !recordId) {
           <div class="heading"><div><h1>Propuestas</h1><p>Del registro a la aprobación: investigador responsable → Coordinación.</p></div>
-            @if (role !== 'coordinator') { <button type="button" class="primary" (click)="newProposal()">＋ Nueva propuesta</button> }</div>
+            <button type="button" class="primary" (click)="newProposal()">＋ Nueva propuesta</button></div>
           <div class="chips">@for (f of proposalFilterList; track f.value) { <button type="button" [class.active]="filter === f.value" (click)="setProposalFilter(f.value)">{{ f.label }}</button> }</div>
           <form class="filters" (ngSubmit)="searchProposals()">
-            <input name="search" aria-label="Buscar por título" [(ngModel)]="search" placeholder="Buscar por título">
-            <button type="submit" class="secondary">Buscar</button><span>{{ proposalTotal }} resultados</span>
+            <input name="search" type="search" aria-label="Buscar por título" [(ngModel)]="search" (ngModelChange)="liveSearchProposals()" placeholder="Buscar por título (se actualiza mientras escribes)">
+            <span>{{ proposalTotal }} resultados</span>
           </form>
-          <div class="record-cards">
+          <div class="record-cards scroll-box">
             @for (p of proposals; track p.id) {
               <a class="record-card" [routerLink]="['/app/proposals', p.id]">
                 <div><h2>{{ p.title }}</h2><p>{{ p.author_name }} · Responsable: {{ p.researcher_name }}</p><small>Registrada el {{ date(p.created_at) }}</small></div>
@@ -145,6 +325,13 @@
             </div>
           }
 
+          @if (proposal['change_request']) {
+            <div class="callout tone-changes"><strong>Solicitud de cambio de investigador pendiente</strong>
+              <p>{{ proposal['change_request'].requester_name }}: «{{ proposal['change_request'].reason }}»</p>
+              @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(proposal['change_request'])">Resolver solicitud</button> }
+              @else { <small>Coordinación la revisará pronto.</small> }</div>
+          }
+
           <section class="panel">
             <dl class="details">
               <div><dt>Autor</dt><dd>{{ proposal['author_name'] }} ({{ roleName(proposal['author_role']) }})</dd></div>
@@ -154,17 +341,27 @@
             </dl>
             <h3>Descripción</h3><p class="prose">{{ proposal['description'] }}</p>
             <h3>Objetivos</h3><p class="prose">{{ proposal['objectives'] }}</p>
+            @if (proposal['justification']) { <h3>Justificación</h3><p class="prose">{{ proposal['justification'] }}</p> }
+            @if (proposal['file']) {
+              <h3>Archivo adjunto</h3>
+              <div class="file-row"><div><strong>📎 {{ proposal['file'].filename }}</strong><small>{{ (proposal['file'].size_bytes / 1024) | number:'1.0-0' }} KB</small></div>
+                <button type="button" class="text-button" (click)="downloadProposalFile()">Descargar</button></div>
+            }
             <div class="actions">
               @if (canReviewProposal) { <button type="button" class="primary" (click)="reviewProposal()">Revisar propuesta</button> }
               @if (isAuthor && proposal['status'] === 'changes_requested') { <button type="button" class="primary" (click)="correctProposal()">Corregir y reenviar</button> }
               @if (proposal['project_id']) { <a class="primary-link" [routerLink]="['/app/projects', proposal['project_id']]">Ir al proyecto →</a> }
               @if (proposal['status'] === 'cancelled' && (isAuthor || role === 'coordinator')) { <button type="button" class="secondary" (click)="reactivateProposal()">Reactivar</button> }
-              @if (canCancelProposal) { <button type="button" class="danger-text" (click)="cancelProposal()">Cancelar propuesta</button> }
+              @if (role === 'coordinator' && !['approved','rejected','cancelled'].includes(proposal['status'])) {
+                <button type="button" class="secondary" (click)="changeProposalResearcher()">Cambiar investigador</button>
+              }
+              @if (canRequestProposalChange) { <button type="button" class="secondary" (click)="requestResearcherChange('proposal')">Solicitar cambio de investigador</button> }
+              @if (canCancelProposal) { <button type="button" class="danger-outline" (click)="cancelProposal()">✕ Cancelar propuesta</button> }
             </div>
           </section>
 
           <section class="panel"><h2>Historial</h2>
-            <ol class="timeline">
+            <ol class="timeline scroll-box">
               @for (e of proposalHistory; track e.id) {
                 <li><strong>{{ proposalEvent(e.action) }}</strong><small>{{ e.actor_name || 'Sistema' }} · {{ date(e.created_at) }}</small>
                   @if (e.details) { <p>{{ e.details }}</p> }</li>
@@ -178,7 +375,7 @@
             @if (role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport(true)">Reporte general</button> }</div>
           <div class="chips">@for (f of projectFilters; track f.value) { <button type="button" [class.active]="filter === f.value" (click)="filter = f.value">{{ f.label }}</button> }</div>
           <div class="filters"><input aria-label="Buscar proyecto" [(ngModel)]="search" placeholder="Buscar por título o responsable"><span>{{ visibleProjects.length }} resultados</span></div>
-          <div class="record-cards">
+          <div class="record-cards scroll-box">
             @for (p of visibleProjects; track p.id) {
               <a class="record-card" [routerLink]="['/app/projects', p.id]">
                 <div><h2>{{ p.title }}</h2><p>Responsable: {{ p.researcher_name }}</p>
@@ -205,6 +402,13 @@
             <div class="callout tone-cancelled"><strong>Proyecto cancelado</strong><p>{{ project['status_note'] }}</p></div>
           } @else if (project['status'] === 'finalized') {
             <div class="callout tone-done"><strong>Proyecto completado</strong><p>Toda la información queda disponible para consulta.</p></div>
+          }
+
+          @if (project['change_request']) {
+            <div class="callout tone-changes"><strong>Solicitud de cambio de investigador pendiente</strong>
+              <p>{{ project['change_request'].requester_name }}: «{{ project['change_request'].reason }}»</p>
+              @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(project['change_request'])">Resolver solicitud</button> }
+              @else { <small>Coordinación la revisará pronto.</small> }</div>
           }
 
           <div class="tabs" role="tablist">
@@ -238,6 +442,7 @@
                 }
                 @if (role === 'coordinator' && project['status'] === 'closing') { <button type="button" class="primary" (click)="reviewClosure()">Revisar cierre</button> }
                 @if (isLead || role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport()">Reporte del proyecto</button> }
+                @if (canRequestProjectChange) { <button type="button" class="secondary" (click)="requestResearcherChange('project')">Solicitar cambio de investigador</button> }
                 @if (role === 'coordinator' && ['active','changes','closing'].includes(project['status'])) {
                   <button type="button" class="secondary" (click)="changeResearcher()">Cambiar responsable</button>
                   <button type="button" class="danger-text" (click)="cancelProject()">Cancelar proyecto</button>
@@ -247,7 +452,7 @@
             </section>
 
           } @else if (tab === 'Equipo') {
-            <section class="panel">
+            <section class="panel tab-panel">
               <div class="panel-head"><h2>Equipo</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="addMember()">＋ Agregar integrante</button> }</div>
               @for (m of activeMembers; track m.user_id) {
                 <div class="list-row">
@@ -269,9 +474,10 @@
             </section>
 
           } @else if (tab === 'Actividades') {
-            <section class="panel">
+            <section class="panel tab-panel">
               <div class="panel-head"><h2>Actividades</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="activityForm()">＋ Nueva actividad</button> }</div>
-              @for (a of activities; track a.id) {
+              @if (activities.length > 3) { <input class="tab-search" type="search" aria-label="Buscar actividad" [(ngModel)]="activityFilter" placeholder="Buscar actividad o responsable…"> }
+              @for (a of visibleActivities; track a.id) {
                 <a class="list-row" [class.muted-row]="a.status === 'cancelled'" [routerLink]="['/app/activities', a.id]">
                   <div><strong>{{ a.description }}</strong><small>{{ a.participant_name }} · vence {{ date(a.deadline) }}
                     @if (+a.evidence_count) { · {{ a.evidence_count }} evidencia(s) }</small></div>
@@ -284,7 +490,7 @@
             </section>
 
           } @else if (tab === 'Hitos') {
-            <section class="panel">
+            <section class="panel tab-panel">
               <div class="panel-head"><h2>Hitos</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="milestoneForm()">＋ Nuevo hito</button> }</div>
               <p class="muted">Un hito se marca como alcanzado automáticamente cuando todas sus actividades están completadas.</p>
               @for (m of milestones; track m.id) {
@@ -300,9 +506,10 @@
             </section>
 
           } @else if (tab === 'Documentos') {
-            <section class="panel">
+            <section class="panel tab-panel">
               <div class="panel-head"><h2>Documentos</h2>@if (isMember && projectEditable) { <button type="button" class="primary" (click)="uploadDocument()">＋ Subir documento</button> }</div>
-              @for (d of documents; track d.id) {
+              @if (documents.length > 3) { <input class="tab-search" type="search" aria-label="Buscar documento" [(ngModel)]="documentFilter" placeholder="Buscar documento…"> }
+              @for (d of visibleDocuments; track d.id) {
                 <div class="file-row">
                   <div><strong>{{ d.title }}</strong> @if (+d.restricted) { <span class="badge tone-neutral">Solo investigadores</span> }
                     <small>v{{ d.version }} · {{ d.uploaded_by_name }} · {{ date(d.updated_at) }}</small></div>
@@ -326,7 +533,7 @@
             </section>
 
           } @else if (tab === 'Historial') {
-            <section class="panel"><h2>Historial</h2>
+            <section class="panel tab-panel"><h2>Historial</h2>
               <ol class="timeline">
                 @for (e of history; track e.id) {
                   <li><strong>{{ eventLabel(e) }}</strong><small>{{ e.actor_name }} · {{ date(e.created_at) }}</small>
@@ -369,7 +576,7 @@
             </div>
           </section>
 
-          <section class="panel"><h2>Evidencias</h2>
+          <section class="panel tab-panel short"><h2>Evidencias</h2>
             @for (e of evidence; track e.id) {
               <div class="file-row"><div><strong>{{ e.title }}</strong><small>{{ e.filename }} · {{ e.uploaded_by_name }} · {{ date(e.updated_at) }}</small></div>
                 <div class="row-actions"><button type="button" class="text-button" (click)="download('evidence', e.id)">Descargar</button>
@@ -395,13 +602,15 @@
             <button type="button" [class.active]="userFilter === ''" (click)="userFilter = ''">Todos</button>
           </div>
           <div class="filters"><input aria-label="Buscar usuario" [(ngModel)]="search" placeholder="Buscar por nombre, usuario o correo"><span>{{ visibleUsers.length }} resultados</span></div>
-          <section class="table-panel"><div class="table-scroll"><table>
+          <section class="table-panel"><div class="table-scroll scroll-box"><table>
             <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead>
             <tbody>
               @for (u of visibleUsers; track u.id) {
                 <tr><td>{{ u.name }}@if (u.email) { <small class="block">{{ u.email }}</small> }</td><td>{{ u.username }}</td><td>{{ roleName(u.role) }}</td>
-                  <td><span class="badge" [class]="'badge tone-' + status('user', u.status).tone">{{ status('user', u.status).label }}</span></td>
+                  <td><span class="badge" [class]="'badge tone-' + status('user', u.status).tone">{{ status('user', u.status).label }}</span>
+                    @if (u.temporary_password) { <span class="badge tone-progress" title="Aún no crea su propia contraseña">Contraseña temporal</span> }</td>
                   <td class="row-actions"><button type="button" class="text-button" (click)="editUser(u)">Editar</button>
+                    @if (+u.id !== me) { <button type="button" class="text-button danger-text" (click)="deleteUser(u)">Eliminar</button> }
                     <button type="button" class="text-button" (click)="resetPassword(u)">Contraseña</button></td></tr>
               } @empty { <tr><td colspan="5" class="empty">No hay usuarios con este filtro.</td></tr> }
             </tbody></table></div></section>
@@ -410,7 +619,7 @@
         } @else if (section === 'institutional') {
           <div class="heading"><div><h1>Fuentes institucionales</h1><p>Reglamentos y guías que el asistente puede consultar.</p></div>
             @if (role === 'coordinator') { <button type="button" class="primary" (click)="uploadDocument(undefined, true)">＋ Agregar fuente</button> }</div>
-          <section class="panel">
+          <section class="panel tab-panel">
             @for (d of sources; track d.id) {
               <div class="file-row"><div><strong>{{ d.title }}</strong><small>v{{ d.version }} · {{ date(d.updated_at) }}{{ d.indexed ? '' : ' · sin texto para el asistente' }}</small></div>
                 <div class="row-actions"><button type="button" class="text-button" (click)="download('institutional-documents', d.id)">Descargar</button>
@@ -423,25 +632,86 @@
 
         <!-- ========================= ASISTENTE ========================= -->
         } @else if (section === 'assistant') {
-          <div class="heading"><div><h1>Asistente de IA</h1><p>Responde con la información de tus proyectos y las fuentes institucionales, citando de dónde la tomó.</p></div></div>
-          <section class="panel chat">
-            @if (!messages.length) {
-              <div class="assistant-intro"><span class="assistant-symbol">◈</span><h2>¿En qué puedo ayudarte?</h2>
-                <p>Prueba: «¿Qué actividades tengo pendientes?», «Resume el último informe» o «¿Qué dice el reglamento sobre el cierre?».</p></div>
-            }
-            @for (m of messages; track $index) {
-              <article class="message" [class.mine]="m.author === 'Tú'"><strong>{{ m.author }}</strong>
-                @if (m.html) { <div class="md" [innerHTML]="m.html"></div> }
-                @else if (m.pending) { <p class="typing" role="status">Escribiendo<span>.</span><span>.</span><span>.</span></p> }
-                @else { <p>{{ m.text }}</p> }
-              </article>
-            }
-            <form class="chat-form" (ngSubmit)="ask()">
-              <select name="mode" aria-label="Tipo de consulta" [(ngModel)]="assistantMode">
-                <option value="ask">Preguntar</option><option value="summarize">Resumir</option><option value="explain">Explicar</option><option value="locate">Localizar</option>
-              </select>
-              <input name="question" aria-label="Pregunta" [(ngModel)]="question" placeholder="Escribe tu pregunta…" required>
-              <button class="primary" type="submit" [disabled]="asking || !question.trim()">Enviar →</button>
+          <div class="chat-shell" [class.with-history]="historyOpen">
+            <aside class="chat-history" [class.open]="historyOpen" aria-label="Historial de chats">
+              <div class="history-head"><strong>Tus chats</strong>
+                <button type="button" class="icon-button" (click)="historyOpen = false" aria-label="Ocultar historial">×</button></div>
+              <button type="button" class="primary wide-button" (click)="newChat()" [disabled]="asking">＋ Nuevo chat</button>
+              <div class="history-list">
+                @for (c of chats; track c.id) {
+                  <div class="history-item" [class.active]="+c.id === chatId">
+                    <button type="button" class="history-open" (click)="openChat(+c.id)"><span>{{ c.title }}</span><small>{{ chatDay(c.updated_at) }}</small></button>
+                    <button type="button" class="icon-button danger-text" (click)="deleteChat(c)" [attr.aria-label]="'Eliminar ' + c.title" title="Eliminar chat">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+                  </div>
+                } @empty { <p class="muted">Aún no tienes chats guardados.</p> }
+              </div>
+            </aside>
+            @if (historyOpen) { <button type="button" class="history-scrim" aria-label="Ocultar historial" (click)="historyOpen = false"></button> }
+
+            <section class="chat-panel">
+              <header class="chat-top">
+                <button type="button" class="secondary small" (click)="historyOpen = !historyOpen" [attr.aria-expanded]="historyOpen">☰ Historial</button>
+                <strong class="chat-title">{{ chatTitle }}</strong>
+                <button type="button" class="secondary small" (click)="newChat()" [disabled]="asking || (!messages.length && !chatId)">＋ Nuevo</button>
+              </header>
+              <div class="chat-scroll" #chatScroll>
+                @if (!messages.length) {
+                  <div class="assistant-intro"><span class="assistant-symbol">◈</span><h2>¿En qué puedo ayudarte?</h2>
+                    <p>Pregunta por tus proyectos, actividades o documentos, o cualquier duda de investigación. También puedes adjuntar un archivo para que lo revise.</p></div>
+                }
+                @for (m of messages; track $index) {
+                  <article class="message" [class.mine]="m.author === 'Tú'">
+                    <strong class="who">{{ m.author === 'Tú' ? 'Tú' : 'Asistente' }}</strong>
+                    @if (m.attachment) { <span class="file-chip">📎 {{ m.attachment }}</span> }
+                    @if (m.html) { <div class="md" [innerHTML]="m.html"></div> }
+                    @else if (m.pending) { <p class="typing" role="status">Escribiendo<span>.</span><span>.</span><span>.</span></p> }
+                    @else { <p>{{ m.text }}</p> }
+                  </article>
+                }
+              </div>
+              <form class="chat-form" (ngSubmit)="ask()">
+                @if (attachment || attachBusy) {
+                  <div class="attach-row"><span class="file-chip">📎 {{ attachBusy ? 'Leyendo archivo…' : attachment!.name }}</span>
+                    @if (attachment) { <button type="button" class="icon-button" (click)="attachment = undefined" aria-label="Quitar archivo">×</button> }</div>
+                }
+                <div class="chat-input">
+                  <label class="attach-button" title="Adjuntar archivo" aria-label="Adjuntar archivo">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
+                    <input type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.webp,.txt,.csv,.md" (change)="chooseAttachment($event)" [disabled]="asking">
+                  </label>
+                  <textarea name="question" rows="1" aria-label="Escribe tu mensaje" [(ngModel)]="question" (keydown)="chatKeydown($event)"
+                    placeholder="Escribe tu mensaje…"></textarea>
+                  <button class="primary send" type="submit" [disabled]="asking || attachBusy || (!question.trim() && !attachment)" aria-label="Enviar">➤</button>
+                </div>
+                <small class="muted chat-hint">Enter para enviar · Shift + Enter para nueva línea · PDF, Word, Excel, imagen o texto (máx. 5 MB)</small>
+              </form>
+            </section>
+          </div>
+
+        <!-- ========================= MI PERFIL ========================= -->
+        } @else if (section === 'profile') {
+          <div class="heading"><div><h1>Mi perfil</h1><p>Tu información y tu contraseña.</p></div></div>
+          <section class="panel profile-panel">
+            <div class="profile-photo">
+              @if (profileAvatar) { <img [src]="profileAvatar" alt="Tu foto de perfil"> } @else { <span class="avatar big">{{ initials }}</span> }
+              <label class="secondary-link file-label">Cambiar foto<input type="file" accept="image/png,image/jpeg,image/webp" (change)="choosePhoto($event)"></label>
+              @if (profileAvatar) { <button type="button" class="text-button danger-text" (click)="profileAvatar = ''">Quitar foto</button> }
+            </div>
+            <form class="profile-form" (ngSubmit)="saveProfile()">
+              <label for="p-name">Nombre completo</label>
+              <input id="p-name" name="profileName" [(ngModel)]="profileName">
+              <label for="p-email">Correo</label>
+              <input id="p-email" name="profileEmail" type="email" [(ngModel)]="profileEmail" placeholder="tu@correo.com">
+              <small class="hint">Lo usamos para enviarte un código si olvidas tu contraseña.</small>
+              <dl class="details">
+                <div><dt>Usuario</dt><dd>{{ auth.user()?.username }}</dd></div>
+                <div><dt>Rol</dt><dd>{{ roleLabel }}</dd></div>
+              </dl>
+              <div class="actions">
+                <button type="submit" class="primary" [disabled]="profileSaving">{{ profileSaving ? 'Guardando…' : 'Guardar cambios' }}</button>
+                <button type="button" class="secondary" (click)="changeMyPassword()">Cambiar mi contraseña</button>
+              </div>
             </form>
           </section>
         } @else {
@@ -519,4 +789,6 @@
       </section>
     </div>
   }
+  <ng-template #eyeOn><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></ng-template>
+  <ng-template #eyeOff><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1A9.8 9.8 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></ng-template>
 </ion-content>

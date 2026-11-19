@@ -19,6 +19,7 @@ export const SECTIONS: Section[] = [
   { key: 'users', title: 'Usuarios', roles: ['coordinator'], menu: true },
   { key: 'institutional', title: 'Fuentes institucionales', roles: ALL, menu: true },
   { key: 'assistant', title: 'Asistente de IA', roles: ALL, menu: true },
+  { key: 'profile', title: 'Mi perfil', roles: ALL, menu: true },
 ];
 
 export function sectionAllowed(key: string, role: Role): boolean {
@@ -84,7 +85,7 @@ export const PROJECT_FILTERS: { value: string; label: string }[] = [
 ];
 
 export function proposalFilters(role: Role | null): { value: string; label: string }[] {
-  const mine = role === 'coordinator' ? [{ value: 'pending_coordinator', label: 'Esperan mi decisión' }]
+  const mine = role === 'coordinator' ? [{ value: 'pending_coordinator', label: 'Esperan mi decisión' }, { value: 'pending_researcher_review', label: 'Por revisar' }]
     : role === 'researcher' ? [{ value: 'pending_researcher_review', label: 'Por revisar' }] : [];
   return [
     { value: '', label: 'Todas' },

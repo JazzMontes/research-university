@@ -119,7 +119,7 @@ begin
   if dd.id is null then perform research.fail(404, 'Documento no disponible.'); end if;
   if dd.kind <> 'institutional' then
     perform research.project_access(u, dd.project_id);
-    if dd.restricted = 1 and u.role <> 'researcher' then perform research.fail(404, 'Documento no disponible.'); end if;
+    if dd.restricted = 1 and u.role = 'student' then perform research.fail(404, 'Documento no disponible.'); end if;
   end if;
   return dd;
 end $$;
@@ -144,7 +144,7 @@ begin
     return research.ok(jsonb_build_object('items', (
       select coalesce(jsonb_agg(research.document_json(x) order by x.id desc), '[]')
       from research.documents x where x.project_id = pid and x.deleted_at is null
-        and (u.role = 'researcher' or x.restricted = 0)
+        and (u.role <> 'student' or x.restricted = 0)
         and ((module = 'evidence' and x.kind = 'evidence' and x.activity_id = aid) or (module <> 'evidence' and x.kind = 'project')))));
   end if;
 
@@ -182,7 +182,11 @@ begin
     pid := case when dd.id is not null then dd.project_id else research.req_id(d, 'project_id') end;
     p := research.project_access(u, pid, true);
     perform research.project_active(p);
-    if u.role not in ('student', 'researcher') then perform research.fail(403, 'Solo los participantes del proyecto administran archivos.'); end if;
+    -- Solo el equipo del proyecto sube o borra archivos (Coordinación no entra a proyectos ajenos).
+    if not exists (select 1 from research.participants t where t.project_id = pid and t.user_id = u.id and t.is_active = 1)
+       and p.responsible_researcher_id <> u.id then
+      perform research.fail(403, 'Solo los participantes del proyecto administran archivos.');
+    end if;
   end if;
 
   if act in ('upload', 'update', 'upload-version') then

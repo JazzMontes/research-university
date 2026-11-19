@@ -10,8 +10,15 @@ returns text language sql immutable as $$
   select case m || '/' || a
     when 'api/health' then 'GET'
     when 'auth/login' then 'POST' when 'auth/logout' then 'POST' when 'auth/session' then 'GET'
+    when 'auth/reset-password' then 'POST'
+    when 'profile/update' then 'POST' when 'profile/change-password' then 'POST'
+    when 'assistant/chats' then 'GET' when 'assistant/chat-messages' then 'GET'
+    when 'assistant/chat-save' then 'POST' when 'assistant/chat-delete' then 'POST'
+    when 'proposals/download-file' then 'GET' when 'proposals/change-researcher' then 'POST'
+    when 'changes/list' then 'GET' when 'changes/request' then 'POST' when 'changes/review' then 'POST'
+    when 'notifications/list' then 'POST' when 'notifications/read' then 'POST'
     when 'users/list' then 'GET' when 'users/create' then 'POST' when 'users/update' then 'POST'
-    when 'users/reset-password' then 'POST'
+    when 'users/reset-password' then 'POST' when 'users/delete' then 'POST'
     when 'catalogs/researchers' then 'GET' when 'catalogs/participants' then 'GET'
     when 'proposals/list' then 'GET' when 'proposals/detail' then 'GET' when 'proposals/history' then 'GET'
     when 'proposals/create' then 'POST' when 'proposals/update' then 'POST' when 'proposals/review' then 'POST'
@@ -69,9 +76,15 @@ begin
       return research.auth_login(d);
     elsif m = 'auth' and a = 'logout' then
       return research.auth_logout(token);
+    elsif m = 'auth' and a = 'reset-password' then
+      return research.auth_reset_password(d);
     end if;
 
     u := research.require_user(token);
+    -- Con contraseña temporal solo se puede consultar la sesión y cambiarla.
+    if coalesce(u.must_change_password, 0) = 1 and not (m = 'auth' or (m = 'profile' and a = 'change-password')) then
+      perform research.fail(428, 'Primero cambia tu contraseña temporal.');
+    end if;
 
     return case
       when m = 'auth' then research.ok(jsonb_build_object('user', research.public_user(u)))
@@ -86,6 +99,10 @@ begin
       when m = 'closures' then research.ep_closures(u, a, d, is_post)
       when m in ('documents', 'evidence', 'institutional-documents') then research.ep_documents(u, m, a, d, is_post)
       when m = 'reports' then research.ep_reports(u, a, d)
+      when m = 'profile' then research.ep_profile(u, a, d, token)
+      when m = 'changes' then research.ep_changes(u, a, d)
+      when m = 'notifications' then research.ep_notifications(u, a, d)
+      when m = 'assistant' and a like 'chat%' then research.ep_chats(u, a, d)
       when m = 'assistant' then research.ep_assistant(u, a, d)
       else research.ok(jsonb_build_object('message', 'Módulo no disponible.'), 404)
     end;
