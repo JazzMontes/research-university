@@ -111,3 +111,10 @@ Pendiente → Entregar → En revisión → Aceptar (**Completada**) o Pedir cam
 - **Archivo opcional en propuestas** al crearlas o corregirlas; al aprobarse pasa a Documentos del proyecto.
 - **Eliminar usuarios definitivamente** (con confirmación escribiendo ELIMINAR). Si la persona tenía historial, queda como «Usuario eliminado».
 - **Cancelar propuesta** ahora es un botón visible en el detalle de la propuesta.
+
+## Versión 3.12
+- Íconos en el menú, botones, pestañas, tarjetas, buscadores, notificaciones y diálogos.
+- Los textos entre «» se muestran en ***negrita y cursiva*** en toda la app (avisos, diálogos, historial, notificaciones).
+- Las cajas de texto muestran un ejemplo gris que desaparece al escribir.
+- Eliminar usuario ya no repite el nombre cuando el usuario y el nombre son iguales.
+- "¿Olvidaste tu contraseña?" pide el correo completo y lo valida.

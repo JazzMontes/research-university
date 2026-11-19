@@ -32,12 +32,14 @@
         </form>
         } @else if (loginMode === 'forgot') {
         <form class="login-card" (ngSubmit)="requestCode()" [attr.aria-busy]="recoverBusy">
-          <h2>Recuperar contraseña</h2><p>Te enviaremos un código de 6 números al correo de tu cuenta.</p>
-          <label for="recover-id">Usuario o correo</label>
-          <input id="recover-id" name="recoverId" autocapitalize="none" spellcheck="false" [(ngModel)]="recoverId" placeholder="Tu usuario o tu correo" [disabled]="recoverBusy">
+          <h2>Recuperar contraseña</h2><p>Te enviaremos un código de 6 números al correo registrado en tu cuenta.</p>
+          <label for="recover-id">Correo de tu cuenta</label>
+          <input id="recover-id" name="recoverId" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false"
+            [(ngModel)]="recoverId" placeholder="nombre@correo.com" [disabled]="recoverBusy">
+          @if (recoverId && !recoverId.includes('@')) { <small class="strength">Escribe el correo completo, con @ y dominio.</small> }
           @if (loginError) { <p class="error" role="alert">{{ loginError }}</p> }
           <button class="primary wide" type="submit" [disabled]="recoverBusy">{{ recoverBusy ? 'Enviando…' : 'Enviarme el código' }}</button>
-          <p class="login-links"><button type="button" class="link-button" (click)="backToLogin()">← Volver a iniciar sesión</button></p>
+          <p class="login-links"><button type="button" class="link-button" (click)="backToLogin()"><app-icon name="back"></app-icon>Volver a iniciar sesión</button></p>
           <p class="muted">Si tu cuenta no tiene correo registrado, pide a Coordinación una contraseña temporal.</p>
         </form>
         } @else {
@@ -109,32 +111,32 @@
         <small>GESTIÓN DE INVESTIGACIÓN</small>
         <nav aria-label="Navegación principal" (click)="menuOpen = false">
           @for (item of menu; track item.key) {
-            <a [routerLink]="['/app', item.key]" [class.active]="section === item.key || (section === 'activities' && item.key === 'projects')">{{ item.title }}</a>
+            <a [routerLink]="['/app', item.key]" [class.active]="section === item.key || (section === 'activities' && item.key === 'projects')"><app-icon [name]="item.icon" [size]="20"></app-icon><span>{{ item.title }}</span></a>
           }
         </nav>
-        <button class="logout" type="button" (click)="logout()" [disabled]="logoutBusy">{{ logoutBusy ? 'Cerrando sesión…' : '↪ Cerrar sesión' }}</button>
+        <button class="logout" type="button" (click)="logout()" [disabled]="logoutBusy"><app-icon name="logout"></app-icon>{{ logoutBusy ? 'Cerrando sesión…' : 'Cerrar sesión' }}</button>
       </aside>
       @if (menuOpen) { <button type="button" class="scrim" aria-label="Cerrar menú" (click)="menuOpen = false"></button> }
       <main>
         <header class="topbar">
-          <button type="button" class="menu-button" (click)="menuOpen = !menuOpen" aria-label="Abrir menú" [attr.aria-expanded]="menuOpen">☰</button>
+          <button type="button" class="menu-button" (click)="menuOpen = !menuOpen" aria-label="Abrir menú" [attr.aria-expanded]="menuOpen"><app-icon name="menu" [size]="22"></app-icon></button>
           <span class="breadcrumb">{{ sectionTitle }}</span>
           <div class="bell-wrap">
             <button type="button" class="bell" (click)="toggleNotifications()" [attr.aria-expanded]="notifOpen"
               [attr.aria-label]="notifications.unread() ? notifications.unread() + ' notificaciones sin leer' : 'Notificaciones'">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8M10.3 20a2 2 0 0 0 3.4 0"/></svg>
+              <app-icon name="bell" [size]="21"></app-icon>
               @if (notifications.unread()) { <span class="bell-count">{{ notifications.unread() > 99 ? '99+' : notifications.unread() }}</span> }
             </button>
             @if (notifOpen) {
               <button type="button" class="bell-scrim" aria-label="Cerrar notificaciones" (click)="notifOpen = false"></button>
               <section class="bell-panel" aria-label="Notificaciones">
                 <header><strong>Notificaciones</strong>
-                  @if (notifications.unread()) { <button type="button" class="link-button" (click)="notifications.markRead()">Marcar todas como leídas</button> }</header>
+                  @if (notifications.unread()) { <button type="button" class="link-button" (click)="notifications.markRead()"><app-icon name="check"></app-icon>Marcar todas como leídas</button> }</header>
                 <div class="bell-list">
                   @for (n of notifications.items(); track n.id) {
                     <button type="button" class="bell-item" [class.unread]="!n.read_at" (click)="openNotification(n)">
                       <span class="dot" [class]="'dot tone-' + n.tone"></span>
-                      <span class="bell-text"><strong>{{ n.title }}</strong>@if (n.body) { <small class="bell-body">{{ n.body }}</small> }<small>{{ timeAgo(n.created_at) }}</small></span>
+                      <span class="bell-text"><strong [innerHTML]="fmt(n.title)"></strong>@if (n.body) { <small class="bell-body" [innerHTML]="fmt(n.body)"></small> }<small>{{ timeAgo(n.created_at) }}</small></span>
                     </button>
                   } @empty { <p class="muted bell-empty">No tienes notificaciones.</p> }
                 </div>
@@ -147,15 +149,15 @@
         </header>
 
         @if (notice) {
-          <div class="notice" [class.bad]="noticeTone === 'error'" role="status">{{ notice }}
+          <div class="notice" [class.bad]="noticeTone === 'error'" role="status"><app-icon [name]="noticeTone === 'error' ? 'alert' : 'check'"></app-icon><span [innerHTML]="fmt(notice)"></span>
             <button type="button" (click)="notice = ''" aria-label="Cerrar aviso">×</button></div>
         }
 
         @if (loading) {
           <p class="loading" role="status">Cargando…</p>
         } @else if (loadError) {
-          <section class="panel"><p class="error" role="alert">{{ loadError }}</p>
-            <div class="actions"><button class="secondary" type="button" (click)="load()">Reintentar</button>
+          <section class="panel"><p class="error" role="alert" [innerHTML]="fmt(loadError)"></p>
+            <div class="actions"><button class="secondary" type="button" (click)="load()"><app-icon name="refresh"></app-icon>Reintentar</button>
             <a class="secondary-link" routerLink="/app/dashboard">Ir al inicio</a></div></section>
 
         <!-- ========================= INICIO ========================= -->
@@ -166,7 +168,7 @@
             <section class="todo">
               @for (item of dash['todo']; track item.label) {
                 <a class="todo-card" [class]="'todo-card tone-' + item.tone" [routerLink]="['/app', item.link]" [queryParams]="{ status: item.filter }">
-                  <strong>{{ item.count }}</strong><span>{{ item.label }}</span><em>Ver →</em>
+                  <strong>{{ item.count }}</strong><span>{{ item.label }}</span><em>Ver <app-icon name="next"></app-icon></em>
                 </a>
               }
             </section>
@@ -174,20 +176,20 @@
 
           <section class="stats">
             @for (item of dash['stats'] || []; track item.label) {
-              <a class="stat" [routerLink]="['/app', item.link]" [queryParams]="{ status: item.filter }"><strong>{{ item.value }}</strong><p>{{ item.label }}</p></a>
+              <a class="stat" [routerLink]="['/app', item.link]" [queryParams]="{ status: item.filter }"><span class="stat-icon"><app-icon [name]="statIcon(item.label)" [size]="22"></app-icon></span><div><strong>{{ item.value }}</strong><p>{{ item.label }}</p></div></a>
             }
           </section>
 
           @if (role === 'coordinator' && dash['change_requests']?.length) {
             <section class="panel">
-              <h2>Solicitudes de cambio de investigador</h2>
+              <h2><app-icon name="swap"></app-icon>Solicitudes de cambio de investigador</h2>
               <div class="scroll-box short">
                 @for (r of dash['change_requests']; track r.id) {
                   <div class="list-row">
                     <div><strong>{{ r.target_title }}</strong>
-                      <small>{{ r.requester_name }} pide cambiar a {{ r.current_name }}{{ r.proposed_name ? ' por ' + r.proposed_name : '' }} · «{{ r.reason }}»</small></div>
-                    <div class="row-actions"><a class="text-button" [routerLink]="['/app', r.link]">Ver</a>
-                      <button type="button" class="secondary small" (click)="reviewChangeRequest(r)">Resolver</button></div>
+                      <small>{{ r.requester_name }} pide cambiar a {{ r.current_name }}{{ r.proposed_name ? ' por ' + r.proposed_name : '' }} · <strong><em>{{ r.reason }}</em></strong></small></div>
+                    <div class="row-actions"><a class="text-button" [routerLink]="['/app', r.link]"><app-icon name="next"></app-icon>Ver</a>
+                      <button type="button" class="secondary small" (click)="reviewChangeRequest(r)"><app-icon name="review"></app-icon>Resolver</button></div>
                   </div>
                 }
               </div>
@@ -198,7 +200,7 @@
           <section class="charts">
             @for (kind of ['project', 'proposal', 'activity']; track kind) {
               <div class="chart-card">
-                <h3>{{ kind === 'project' ? 'Proyectos' : kind === 'proposal' ? 'Propuestas' : 'Actividades' }}</h3>
+                <h3><app-icon [name]="kind === 'project' ? 'folder' : kind === 'proposal' ? 'proposal' : 'tasks'"></app-icon>{{ kind === 'project' ? 'Proyectos' : kind === 'proposal' ? 'Propuestas' : 'Actividades' }}</h3>
                 @if (chartTotal($any(kind))) {
                   <div class="donut-wrap">
                     <svg viewBox="0 0 42 42" class="donut" role="img" [attr.aria-label]="(kind === 'project' ? 'Proyectos' : kind === 'proposal' ? 'Propuestas' : 'Actividades') + ' por estado'">
@@ -223,7 +225,7 @@
 
           <section class="charts two">
             <div class="chart-card">
-              <h3>Avance de proyectos en curso</h3>
+              <h3><app-icon name="chart"></app-icon>Avance de proyectos en curso</h3>
               <div class="scroll-box short">
                 @for (p of dash['charts']?.progress || []; track p.id) {
                   <a class="progress-row" [routerLink]="['/app/projects', p.id]">
@@ -236,7 +238,7 @@
               @if (+(dash['charts']?.overdue || 0)) { <p class="late">⚠ {{ dash['charts'].overdue }} actividad(es) retrasada(s) en tus proyectos.</p> }
             </div>
             <div class="chart-card">
-              <h3>Últimos 6 meses</h3>
+              <h3><app-icon name="calendar"></app-icon>Últimos 6 meses</h3>
               <div class="month-chart">
                 @for (m of monthly; track m.label) {
                   <div class="month">
@@ -254,7 +256,7 @@
 
           <section class="charts two">
             <div class="chart-card">
-              <h3>Mis actividades</h3>
+              <h3><app-icon name="tasks"></app-icon>Mis actividades</h3>
               <div class="scroll-box short">
                 @for (a of dash['my_activities'] || []; track a.id) {
                   <a class="list-row" [routerLink]="['/app/activities', a.id]">
@@ -267,7 +269,7 @@
             </div>
             <div class="chart-card">
               @if (canResearch) {
-                <h3>Entregas por revisar</h3>
+                <h3><app-icon name="review"></app-icon>Entregas por revisar</h3>
                 <div class="scroll-box short">
                   @for (a of dash['to_review'] || []; track a.id) {
                     <a class="list-row" [routerLink]="['/app/activities', a.id]">
@@ -277,7 +279,7 @@
                   } @empty { <p class="muted">No hay entregas esperando tu revisión.</p> }
                 </div>
               } @else {
-                <h3>Próximas fechas límite</h3>
+                <h3><app-icon name="clock"></app-icon>Próximas fechas límite</h3>
                 <div class="scroll-box short">
                   @for (a of dash['charts']?.upcoming || []; track a.id) {
                     <a class="list-row" [routerLink]="['/app/activities', a.id]">
@@ -293,10 +295,10 @@
         <!-- ========================= PROPUESTAS ========================= -->
         } @else if (section === 'proposals' && !recordId) {
           <div class="heading"><div><h1>Propuestas</h1><p>Del registro a la aprobación: investigador responsable → Coordinación.</p></div>
-            <button type="button" class="primary" (click)="newProposal()">＋ Nueva propuesta</button></div>
+            <button type="button" class="primary" (click)="newProposal()"><app-icon name="plus"></app-icon>Nueva propuesta</button></div>
           <div class="chips">@for (f of proposalFilterList; track f.value) { <button type="button" [class.active]="filter === f.value" (click)="setProposalFilter(f.value)">{{ f.label }}</button> }</div>
           <form class="filters" (ngSubmit)="searchProposals()">
-            <input name="search" type="search" aria-label="Buscar por título" [(ngModel)]="search" (ngModelChange)="liveSearchProposals()" placeholder="Buscar por título (se actualiza mientras escribes)">
+            <span class="search-icon"><app-icon name="search"></app-icon></span><input name="search" type="search" aria-label="Buscar por título" [(ngModel)]="search" (ngModelChange)="liveSearchProposals()" placeholder="Buscar por título (se actualiza mientras escribes)">
             <span>{{ proposalTotal }} resultados</span>
           </form>
           <div class="record-cards scroll-box">
@@ -313,7 +315,7 @@
           }
 
         } @else if (section === 'proposals' && proposal) {
-          <a class="back" routerLink="/app/proposals">← Propuestas</a>
+          <a class="back" routerLink="/app/proposals"><app-icon name="back"></app-icon>Propuestas</a>
           <div class="heading"><div><h1>{{ proposal['title'] }}</h1><p>{{ proposalWaitingOn }}</p></div>
             <span class="badge big" [class]="'badge big tone-' + status('proposal', proposal['status']).tone">{{ status('proposal', proposal['status']).label }}</span></div>
 
@@ -326,9 +328,9 @@
           }
 
           @if (proposal['change_request']) {
-            <div class="callout tone-changes"><strong>Solicitud de cambio de investigador pendiente</strong>
-              <p>{{ proposal['change_request'].requester_name }}: «{{ proposal['change_request'].reason }}»</p>
-              @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(proposal['change_request'])">Resolver solicitud</button> }
+            <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>Solicitud de cambio de investigador pendiente</strong>
+              <p>{{ proposal['change_request'].requester_name }}: <strong><em>{{ proposal['change_request'].reason }}</em></strong></p>
+              @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(proposal['change_request'])"><app-icon name="review"></app-icon>Resolver solicitud</button> }
               @else { <small>Coordinación la revisará pronto.</small> }</div>
           }
 
@@ -344,19 +346,19 @@
             @if (proposal['justification']) { <h3>Justificación</h3><p class="prose">{{ proposal['justification'] }}</p> }
             @if (proposal['file']) {
               <h3>Archivo adjunto</h3>
-              <div class="file-row"><div><strong>📎 {{ proposal['file'].filename }}</strong><small>{{ (proposal['file'].size_bytes / 1024) | number:'1.0-0' }} KB</small></div>
-                <button type="button" class="text-button" (click)="downloadProposalFile()">Descargar</button></div>
+              <div class="file-row"><div><strong><app-icon name="clip"></app-icon>{{ proposal['file'].filename }}</strong><small>{{ (proposal['file'].size_bytes / 1024) | number:'1.0-0' }} KB</small></div>
+                <button type="button" class="text-button" (click)="downloadProposalFile()"><app-icon name="download"></app-icon>Descargar</button></div>
             }
             <div class="actions">
-              @if (canReviewProposal) { <button type="button" class="primary" (click)="reviewProposal()">Revisar propuesta</button> }
-              @if (isAuthor && proposal['status'] === 'changes_requested') { <button type="button" class="primary" (click)="correctProposal()">Corregir y reenviar</button> }
-              @if (proposal['project_id']) { <a class="primary-link" [routerLink]="['/app/projects', proposal['project_id']]">Ir al proyecto →</a> }
-              @if (proposal['status'] === 'cancelled' && (isAuthor || role === 'coordinator')) { <button type="button" class="secondary" (click)="reactivateProposal()">Reactivar</button> }
+              @if (canReviewProposal) { <button type="button" class="primary" (click)="reviewProposal()"><app-icon name="review"></app-icon>Revisar propuesta</button> }
+              @if (isAuthor && proposal['status'] === 'changes_requested') { <button type="button" class="primary" (click)="correctProposal()"><app-icon name="edit"></app-icon>Corregir y reenviar</button> }
+              @if (proposal['project_id']) { <a class="primary-link" [routerLink]="['/app/projects', proposal['project_id']]"><app-icon name="folder"></app-icon>Ir al proyecto</a> }
+              @if (proposal['status'] === 'cancelled' && (isAuthor || role === 'coordinator')) { <button type="button" class="secondary" (click)="reactivateProposal()"><app-icon name="refresh"></app-icon>Reactivar</button> }
               @if (role === 'coordinator' && !['approved','rejected','cancelled'].includes(proposal['status'])) {
-                <button type="button" class="secondary" (click)="changeProposalResearcher()">Cambiar investigador</button>
+                <button type="button" class="secondary" (click)="changeProposalResearcher()"><app-icon name="swap"></app-icon>Cambiar investigador</button>
               }
-              @if (canRequestProposalChange) { <button type="button" class="secondary" (click)="requestResearcherChange('proposal')">Solicitar cambio de investigador</button> }
-              @if (canCancelProposal) { <button type="button" class="danger-outline" (click)="cancelProposal()">✕ Cancelar propuesta</button> }
+              @if (canRequestProposalChange) { <button type="button" class="secondary" (click)="requestResearcherChange('proposal')"><app-icon name="swap"></app-icon>Solicitar cambio de investigador</button> }
+              @if (canCancelProposal) { <button type="button" class="danger-outline" (click)="cancelProposal()"><app-icon name="ban"></app-icon>Cancelar propuesta</button> }
             </div>
           </section>
 
@@ -364,7 +366,7 @@
             <ol class="timeline scroll-box">
               @for (e of proposalHistory; track e.id) {
                 <li><strong>{{ proposalEvent(e.action) }}</strong><small>{{ e.actor_name || 'Sistema' }} · {{ date(e.created_at) }}</small>
-                  @if (e.details) { <p>{{ e.details }}</p> }</li>
+                  @if (e.details) { <p [innerHTML]="fmt(e.details)"></p> }</li>
               } @empty { <li>Sin movimientos.</li> }
             </ol>
           </section>
@@ -372,9 +374,9 @@
         <!-- ========================= PROYECTOS ========================= -->
         } @else if (section === 'projects' && !recordId) {
           <div class="heading"><div><h1>Proyectos</h1><p>Se crean solos cuando Coordinación aprueba una propuesta.</p></div>
-            @if (role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport(true)">Reporte general</button> }</div>
+            @if (role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport(true)"><app-icon name="printer"></app-icon>Reporte general</button> }</div>
           <div class="chips">@for (f of projectFilters; track f.value) { <button type="button" [class.active]="filter === f.value" (click)="filter = f.value">{{ f.label }}</button> }</div>
-          <div class="filters"><input aria-label="Buscar proyecto" [(ngModel)]="search" placeholder="Buscar por título o responsable"><span>{{ visibleProjects.length }} resultados</span></div>
+          <div class="filters"><span class="search-icon"><app-icon name="search"></app-icon></span><input type="search" aria-label="Buscar proyecto" [(ngModel)]="search" placeholder="Buscar por título o responsable"><span>{{ visibleProjects.length }} resultados</span></div>
           <div class="record-cards scroll-box">
             @for (p of visibleProjects; track p.id) {
               <a class="record-card" [routerLink]="['/app/projects', p.id]">
@@ -389,31 +391,31 @@
           </div>
 
         } @else if (section === 'projects' && project) {
-          <a class="back" routerLink="/app/projects">← Proyectos</a>
+          <a class="back" routerLink="/app/projects"><app-icon name="back"></app-icon>Proyectos</a>
           <div class="heading"><div><h1>{{ project['title'] }}</h1><p>Responsable: {{ project['researcher_name'] }}</p></div>
             <span class="badge big" [class]="'badge big tone-' + status('project', project['status']).tone">{{ status('project', project['status']).label }}</span></div>
 
           @if (project['status'] === 'changes') {
-            <div class="callout tone-changes"><strong>Coordinación pidió cambios antes de cerrar</strong><p>{{ project['status_note'] }}</p>
+            <div class="callout tone-changes"><strong><app-icon name="edit"></app-icon>Coordinación pidió cambios antes de cerrar</strong><p>{{ project['status_note'] }}</p>
               @if (isLead) { <small>Atiende lo pendiente y vuelve a solicitar el cierre desde Resumen.</small> }</div>
           } @else if (project['status'] === 'closing') {
-            <div class="callout tone-progress"><strong>Cierre solicitado</strong><p>Esperando la revisión de Coordinación. Mientras tanto el proyecto es de solo lectura.</p></div>
+            <div class="callout tone-progress"><strong><app-icon name="clock"></app-icon>Cierre solicitado</strong><p>Esperando la revisión de Coordinación. Mientras tanto el proyecto es de solo lectura.</p></div>
           } @else if (project['status'] === 'cancelled') {
-            <div class="callout tone-cancelled"><strong>Proyecto cancelado</strong><p>{{ project['status_note'] }}</p></div>
+            <div class="callout tone-cancelled"><strong><app-icon name="ban"></app-icon>Proyecto cancelado</strong><p>{{ project['status_note'] }}</p></div>
           } @else if (project['status'] === 'finalized') {
-            <div class="callout tone-done"><strong>Proyecto completado</strong><p>Toda la información queda disponible para consulta.</p></div>
+            <div class="callout tone-done"><strong><app-icon name="check"></app-icon>Proyecto completado</strong><p>Toda la información queda disponible para consulta.</p></div>
           }
 
           @if (project['change_request']) {
-            <div class="callout tone-changes"><strong>Solicitud de cambio de investigador pendiente</strong>
-              <p>{{ project['change_request'].requester_name }}: «{{ project['change_request'].reason }}»</p>
-              @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(project['change_request'])">Resolver solicitud</button> }
+            <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>Solicitud de cambio de investigador pendiente</strong>
+              <p>{{ project['change_request'].requester_name }}: <strong><em>{{ project['change_request'].reason }}</em></strong></p>
+              @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(project['change_request'])"><app-icon name="review"></app-icon>Resolver solicitud</button> }
               @else { <small>Coordinación la revisará pronto.</small> }</div>
           }
 
           <div class="tabs" role="tablist">
             @for (t of tabs; track t) {
-              <button type="button" role="tab" [attr.aria-selected]="tab === t" [class.active]="tab === t" (click)="setTab(t)">{{ t }}
+              <button type="button" role="tab" [attr.aria-selected]="tab === t" [class.active]="tab === t" (click)="setTab(t)"><app-icon [name]="tabIcon(t)" [size]="16"></app-icon>{{ t }}
                 @if (t === 'Equipo') { <span class="count">{{ activeMembers.length }}</span> }
                 @if (t === 'Actividades') { <span class="count">{{ activities.length }}</span> }
                 @if (t === 'Hitos') { <span class="count">{{ milestones.length }}</span> }
@@ -437,30 +439,30 @@
               <p><a [routerLink]="['/app/proposals', project['proposal_id']]">Ver la propuesta de origen →</a></p>
               <div class="actions">
                 @if (isLead && projectEditable) {
-                  <button type="button" class="secondary" (click)="editProject()">Editar datos</button>
-                  <button type="button" class="primary" (click)="requestClosure()">Solicitar cierre</button>
+                  <button type="button" class="secondary" (click)="editProject()"><app-icon name="edit"></app-icon>Editar datos</button>
+                  <button type="button" class="primary" (click)="requestClosure()"><app-icon name="flag-done"></app-icon>Solicitar cierre</button>
                 }
-                @if (role === 'coordinator' && project['status'] === 'closing') { <button type="button" class="primary" (click)="reviewClosure()">Revisar cierre</button> }
-                @if (isLead || role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport()">Reporte del proyecto</button> }
-                @if (canRequestProjectChange) { <button type="button" class="secondary" (click)="requestResearcherChange('project')">Solicitar cambio de investigador</button> }
+                @if (role === 'coordinator' && project['status'] === 'closing') { <button type="button" class="primary" (click)="reviewClosure()"><app-icon name="review"></app-icon>Revisar cierre</button> }
+                @if (isLead || role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport()"><app-icon name="printer"></app-icon>Reporte del proyecto</button> }
+                @if (canRequestProjectChange) { <button type="button" class="secondary" (click)="requestResearcherChange('project')"><app-icon name="swap"></app-icon>Solicitar cambio de investigador</button> }
                 @if (role === 'coordinator' && ['active','changes','closing'].includes(project['status'])) {
-                  <button type="button" class="secondary" (click)="changeResearcher()">Cambiar responsable</button>
-                  <button type="button" class="danger-text" (click)="cancelProject()">Cancelar proyecto</button>
+                  <button type="button" class="secondary" (click)="changeResearcher()"><app-icon name="swap"></app-icon>Cambiar responsable</button>
+                  <button type="button" class="danger-text" (click)="cancelProject()"><app-icon name="ban"></app-icon>Cancelar proyecto</button>
                 }
-                @if (role === 'coordinator' && ['finalized','cancelled'].includes(project['status'])) { <button type="button" class="primary" (click)="reopenProject()">Reabrir proyecto</button> }
+                @if (role === 'coordinator' && ['finalized','cancelled'].includes(project['status'])) { <button type="button" class="primary" (click)="reopenProject()"><app-icon name="refresh"></app-icon>Reabrir proyecto</button> }
               </div>
             </section>
 
           } @else if (tab === 'Equipo') {
             <section class="panel tab-panel">
-              <div class="panel-head"><h2>Equipo</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="addMember()">＋ Agregar integrante</button> }</div>
+              <div class="panel-head"><h2>Equipo</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="addMember()"><app-icon name="plus"></app-icon>Agregar integrante</button> }</div>
               @for (m of activeMembers; track m.user_id) {
                 <div class="list-row">
                   <div><strong>{{ m.name }}</strong><small>{{ m.project_role || roleName(m.role) }} · desde {{ date(m.joined_at) }}
                     @if (+m.pending_activities) { · {{ m.pending_activities }} actividad(es) abierta(s) }</small></div>
                   @if (isLead && projectEditable && !isProjectLead(m)) {
-                    <div class="row-actions"><button type="button" class="text-button" (click)="editMemberRole(m)">Cambiar rol</button>
-                    <button type="button" class="text-button danger-text" (click)="removeMember(m)">Retirar</button></div>
+                    <div class="row-actions"><button type="button" class="text-button" (click)="editMemberRole(m)"><app-icon name="edit"></app-icon>Cambiar rol</button>
+                    <button type="button" class="text-button danger-text" (click)="removeMember(m)"><app-icon name="user-minus"></app-icon>Retirar</button></div>
                   }
                 </div>
               }
@@ -468,14 +470,14 @@
                 <h3>Ya no participan</h3>
                 @for (m of formerMembers; track m.user_id) {
                   <div class="list-row muted-row"><div><strong>{{ m.name }}</strong><small>Retirado el {{ date(m.removed_at) }}</small></div>
-                    @if (isLead && projectEditable) { <button type="button" class="text-button" (click)="rejoinMember(m)">Reincorporar</button> }</div>
+                    @if (isLead && projectEditable) { <button type="button" class="text-button" (click)="rejoinMember(m)"><app-icon name="user-plus"></app-icon>Reincorporar</button> }</div>
                 }
               }
             </section>
 
           } @else if (tab === 'Actividades') {
             <section class="panel tab-panel">
-              <div class="panel-head"><h2>Actividades</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="activityForm()">＋ Nueva actividad</button> }</div>
+              <div class="panel-head"><h2>Actividades</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="activityForm()"><app-icon name="plus"></app-icon>Nueva actividad</button> }</div>
               @if (activities.length > 3) { <input class="tab-search" type="search" aria-label="Buscar actividad" [(ngModel)]="activityFilter" placeholder="Buscar actividad o responsable…"> }
               @for (a of visibleActivities; track a.id) {
                 <a class="list-row" [class.muted-row]="a.status === 'cancelled'" [routerLink]="['/app/activities', a.id]">
@@ -486,20 +488,20 @@
                   }
                   <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
                 </a>
-              } @empty { <p class="muted">Todavía no hay actividades.{{ isLead && projectEditable ? ' Crea la primera con «Nueva actividad».' : '' }}</p> }
+              } @empty { <p class="muted">Todavía no hay actividades. @if (isLead && projectEditable) { Crea la primera con <strong><em>Nueva actividad</em></strong>. }</p> }
             </section>
 
           } @else if (tab === 'Hitos') {
             <section class="panel tab-panel">
-              <div class="panel-head"><h2>Hitos</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="milestoneForm()">＋ Nuevo hito</button> }</div>
+              <div class="panel-head"><h2>Hitos</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="milestoneForm()"><app-icon name="plus"></app-icon>Nuevo hito</button> }</div>
               <p class="muted">Un hito se marca como alcanzado automáticamente cuando todas sus actividades están completadas.</p>
               @for (m of milestones; track m.id) {
                 <div class="list-row">
                   <div><strong>{{ m.description }}</strong><small>Meta: {{ date(m.target_date) }} · {{ m.completed_count }} de {{ m.activity_count }} actividades completadas</small></div>
                   <span class="badge" [class]="'badge tone-' + status('milestone', m.status).tone">{{ status('milestone', m.status).label }}</span>
                   @if (isLead && projectEditable) {
-                    <div class="row-actions"><button type="button" class="text-button" (click)="milestoneForm(m)">Editar</button>
-                    <button type="button" class="text-button danger-text" (click)="deleteMilestone(m)">Eliminar</button></div>
+                    <div class="row-actions"><button type="button" class="text-button" (click)="milestoneForm(m)"><app-icon name="edit"></app-icon>Editar</button>
+                    <button type="button" class="text-button danger-text" (click)="deleteMilestone(m)"><app-icon name="trash"></app-icon>Eliminar</button></div>
                   }
                 </div>
               } @empty { <p class="muted">Todavía no hay hitos.</p> }
@@ -507,25 +509,25 @@
 
           } @else if (tab === 'Documentos') {
             <section class="panel tab-panel">
-              <div class="panel-head"><h2>Documentos</h2>@if (isMember && projectEditable) { <button type="button" class="primary" (click)="uploadDocument()">＋ Subir documento</button> }</div>
+              <div class="panel-head"><h2>Documentos</h2>@if (isMember && projectEditable) { <button type="button" class="primary" (click)="uploadDocument()"><app-icon name="plus"></app-icon>Subir documento</button> }</div>
               @if (documents.length > 3) { <input class="tab-search" type="search" aria-label="Buscar documento" [(ngModel)]="documentFilter" placeholder="Buscar documento…"> }
               @for (d of visibleDocuments; track d.id) {
                 <div class="file-row">
                   <div><strong>{{ d.title }}</strong> @if (+d.restricted) { <span class="badge tone-neutral">Solo investigadores</span> }
                     <small>v{{ d.version }} · {{ d.uploaded_by_name }} · {{ date(d.updated_at) }}</small></div>
                   <div class="row-actions">
-                    <button type="button" class="text-button" (click)="download('documents', d.id)">Descargar</button>
-                    <button type="button" class="text-button" (click)="showVersions(d.id)">{{ versionsOf === d.id ? 'Ocultar versiones' : 'Versiones' }}</button>
-                    @if (isMember && projectEditable) { <button type="button" class="text-button" (click)="uploadDocument(d)">Nueva versión</button> }
-                    @if (isLead && projectEditable) { <button type="button" class="text-button" (click)="toggleRestriction(d)">Visibilidad</button> }
-                    @if (canDeleteDocument(d)) { <button type="button" class="text-button danger-text" (click)="deleteDocument(d)">Eliminar</button> }
+                    <button type="button" class="text-button" (click)="download('documents', d.id)"><app-icon name="download"></app-icon>Descargar</button>
+                    <button type="button" class="text-button" (click)="showVersions(d.id)"><app-icon name="clock"></app-icon>{{ versionsOf === d.id ? 'Ocultar versiones' : 'Versiones' }}</button>
+                    @if (isMember && projectEditable) { <button type="button" class="text-button" (click)="uploadDocument(d)"><app-icon name="upload"></app-icon>Nueva versión</button> }
+                    @if (isLead && projectEditable) { <button type="button" class="text-button" (click)="toggleRestriction(d)"><app-icon name="eye"></app-icon>Visibilidad</button> }
+                    @if (canDeleteDocument(d)) { <button type="button" class="text-button danger-text" (click)="deleteDocument(d)"><app-icon name="trash"></app-icon>Eliminar</button> }
                   </div>
                 </div>
                 @if (versionsOf === d.id) {
                   <div class="versions">
                     @for (v of versions; track v.id) {
                       <div class="list-row"><div><strong>v{{ v.version }} · {{ v.filename }}</strong><small>{{ v.uploaded_by_name }} · {{ date(v.created_at) }}{{ v.note ? ' · ' + v.note : '' }}</small></div>
-                        <button type="button" class="text-button" (click)="download('documents', d.id, v.version)">Descargar</button></div>
+                        <button type="button" class="text-button" (click)="download('documents', d.id, v.version)"><app-icon name="download"></app-icon>Descargar</button></div>
                     }
                   </div>
                 }
@@ -537,7 +539,7 @@
               <ol class="timeline">
                 @for (e of history; track e.id) {
                   <li><strong>{{ eventLabel(e) }}</strong><small>{{ e.actor_name }} · {{ date(e.created_at) }}</small>
-                    @if (eventDetail(e)) { <p>{{ eventDetail(e) }}</p> }</li>
+                    @if (eventDetail(e)) { <p [innerHTML]="fmt(eventDetail(e))"></p> }</li>
                 } @empty { <li>Sin movimientos.</li> }
               </ol>
             </section>
@@ -545,7 +547,7 @@
 
         <!-- ========================= ACTIVIDAD ========================= -->
         } @else if (section === 'activities' && activity) {
-          <a class="back" [routerLink]="['/app/projects', activity['project_id']]" [queryParams]="{ tab: 'Actividades' }">← {{ activity['project_title'] }}</a>
+          <a class="back" [routerLink]="['/app/projects', activity['project_id']]" [queryParams]="{ tab: 'Actividades' }"><app-icon name="back"></app-icon>{{ activity['project_title'] }}</a>
           <div class="heading"><div><h1>{{ activity['description'] }}</h1><p>Responsable: {{ activity['participant_name'] }} · vence {{ date(activity['deadline']) }}</p></div>
             <span class="badge big" [class]="'badge big tone-' + status('activity', activity['status']).tone">{{ status('activity', activity['status']).label }}</span></div>
 
@@ -564,14 +566,14 @@
             </dl>
             <div class="actions">
               @if (activityEditable && activityMine && ['pending','changes'].includes(activity['status'])) {
-                <button type="button" class="primary" (click)="submitActivity()">Entregar para revisión</button>
+                <button type="button" class="primary" (click)="submitActivity()"><app-icon name="send"></app-icon>Entregar para revisión</button>
               }
-              @if (activityEditable && activityMine && activityOpen) { <button type="button" class="secondary" (click)="addEvidence()">Adjuntar evidencia</button> }
-              @if (activityEditable && activityLead && activity['status'] === 'in_review') { <button type="button" class="primary" (click)="reviewActivity()">Revisar entrega</button> }
-              @if (activityEditable && activityLead && activity['status'] === 'completed') { <button type="button" class="secondary" (click)="reviewActivity()">Reabrir (pedir cambios)</button> }
+              @if (activityEditable && activityMine && activityOpen) { <button type="button" class="secondary" (click)="addEvidence()"><app-icon name="clip"></app-icon>Adjuntar evidencia</button> }
+              @if (activityEditable && activityLead && activity['status'] === 'in_review') { <button type="button" class="primary" (click)="reviewActivity()"><app-icon name="review"></app-icon>Revisar entrega</button> }
+              @if (activityEditable && activityLead && activity['status'] === 'completed') { <button type="button" class="secondary" (click)="reviewActivity()"><app-icon name="refresh"></app-icon>Reabrir (pedir cambios)</button> }
               @if (activityEditable && activityLead && activityOpen) {
-                <button type="button" class="secondary" (click)="activityForm(activity)">Editar</button>
-                <button type="button" class="danger-text" (click)="cancelActivity()">Cancelar actividad</button>
+                <button type="button" class="secondary" (click)="activityForm(activity)"><app-icon name="edit"></app-icon>Editar</button>
+                <button type="button" class="danger-text" (click)="cancelActivity()"><app-icon name="ban"></app-icon>Cancelar actividad</button>
               }
             </div>
           </section>
@@ -579,15 +581,15 @@
           <section class="panel tab-panel short"><h2>Evidencias</h2>
             @for (e of evidence; track e.id) {
               <div class="file-row"><div><strong>{{ e.title }}</strong><small>{{ e.filename }} · {{ e.uploaded_by_name }} · {{ date(e.updated_at) }}</small></div>
-                <div class="row-actions"><button type="button" class="text-button" (click)="download('evidence', e.id)">Descargar</button>
-                  @if (activityEditable && activityOpen && +e.created_by === me) { <button type="button" class="text-button danger-text" (click)="removeEvidence(e)">Quitar</button> }</div></div>
+                <div class="row-actions"><button type="button" class="text-button" (click)="download('evidence', e.id)"><app-icon name="download"></app-icon>Descargar</button>
+                  @if (activityEditable && activityOpen && +e.created_by === me) { <button type="button" class="text-button danger-text" (click)="removeEvidence(e)"><app-icon name="trash"></app-icon>Quitar</button> }</div></div>
             } @empty { <p class="muted">Sin evidencias adjuntas.</p> }
           </section>
 
           <section class="panel"><h2>Historial</h2>
             <ol class="timeline">
               @for (e of activity['history'] || []; track e.id) {
-                <li><strong>{{ eventLabel(e) }}</strong><small>{{ e.actor_name }} · {{ date(e.created_at) }}</small>@if (eventDetail(e)) { <p>{{ eventDetail(e) }}</p> }</li>
+                <li><strong>{{ eventLabel(e) }}</strong><small>{{ e.actor_name }} · {{ date(e.created_at) }}</small>@if (eventDetail(e)) { <p [innerHTML]="fmt(eventDetail(e))"></p> }</li>
               } @empty { <li>Sin movimientos.</li> }
             </ol>
           </section>
@@ -595,13 +597,13 @@
         <!-- ========================= USUARIOS ========================= -->
         } @else if (section === 'users') {
           <div class="heading"><div><h1>Usuarios</h1><p>Cuentas, roles y acceso. Las cuentas no se borran: se desactivan.</p></div>
-            <button type="button" class="primary" (click)="newUser()">＋ Nuevo usuario</button></div>
+            <button type="button" class="primary" (click)="newUser()"><app-icon name="plus"></app-icon>Nuevo usuario</button></div>
           <div class="chips">
             <button type="button" [class.active]="userFilter === 'active'" (click)="userFilter = 'active'">Activos</button>
             <button type="button" [class.active]="userFilter === 'inactive'" (click)="userFilter = 'inactive'">Inactivos</button>
             <button type="button" [class.active]="userFilter === ''" (click)="userFilter = ''">Todos</button>
           </div>
-          <div class="filters"><input aria-label="Buscar usuario" [(ngModel)]="search" placeholder="Buscar por nombre, usuario o correo"><span>{{ visibleUsers.length }} resultados</span></div>
+          <div class="filters"><span class="search-icon"><app-icon name="search"></app-icon></span><input type="search" aria-label="Buscar usuario" [(ngModel)]="search" placeholder="Buscar por nombre, usuario o correo"><span>{{ visibleUsers.length }} resultados</span></div>
           <section class="table-panel"><div class="table-scroll scroll-box"><table>
             <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead>
             <tbody>
@@ -609,23 +611,23 @@
                 <tr><td>{{ u.name }}@if (u.email) { <small class="block">{{ u.email }}</small> }</td><td>{{ u.username }}</td><td>{{ roleName(u.role) }}</td>
                   <td><span class="badge" [class]="'badge tone-' + status('user', u.status).tone">{{ status('user', u.status).label }}</span>
                     @if (u.temporary_password) { <span class="badge tone-progress" title="Aún no crea su propia contraseña">Contraseña temporal</span> }</td>
-                  <td class="row-actions"><button type="button" class="text-button" (click)="editUser(u)">Editar</button>
-                    @if (+u.id !== me) { <button type="button" class="text-button danger-text" (click)="deleteUser(u)">Eliminar</button> }
-                    <button type="button" class="text-button" (click)="resetPassword(u)">Contraseña</button></td></tr>
+                  <td class="row-actions"><button type="button" class="text-button" (click)="editUser(u)"><app-icon name="edit"></app-icon>Editar</button>
+                    @if (+u.id !== me) { <button type="button" class="text-button danger-text" (click)="deleteUser(u)"><app-icon name="trash"></app-icon>Eliminar</button> }
+                    <button type="button" class="text-button" (click)="resetPassword(u)"><app-icon name="key"></app-icon>Contraseña</button></td></tr>
               } @empty { <tr><td colspan="5" class="empty">No hay usuarios con este filtro.</td></tr> }
             </tbody></table></div></section>
 
         <!-- ========================= FUENTES ========================= -->
         } @else if (section === 'institutional') {
           <div class="heading"><div><h1>Fuentes institucionales</h1><p>Reglamentos y guías que el asistente puede consultar.</p></div>
-            @if (role === 'coordinator') { <button type="button" class="primary" (click)="uploadDocument(undefined, true)">＋ Agregar fuente</button> }</div>
+            @if (role === 'coordinator') { <button type="button" class="primary" (click)="uploadDocument(undefined, true)"><app-icon name="plus"></app-icon>Agregar fuente</button> }</div>
           <section class="panel tab-panel">
             @for (d of sources; track d.id) {
               <div class="file-row"><div><strong>{{ d.title }}</strong><small>v{{ d.version }} · {{ date(d.updated_at) }}{{ d.indexed ? '' : ' · sin texto para el asistente' }}</small></div>
-                <div class="row-actions"><button type="button" class="text-button" (click)="download('institutional-documents', d.id)">Descargar</button>
+                <div class="row-actions"><button type="button" class="text-button" (click)="download('institutional-documents', d.id)"><app-icon name="download"></app-icon>Descargar</button>
                   @if (role === 'coordinator') {
-                    <button type="button" class="text-button" (click)="uploadDocument(d, true)">Nueva versión</button>
-                    <button type="button" class="text-button danger-text" (click)="deleteDocument(d, true)">Retirar</button>
+                    <button type="button" class="text-button" (click)="uploadDocument(d, true)"><app-icon name="upload"></app-icon>Nueva versión</button>
+                    <button type="button" class="text-button danger-text" (click)="deleteDocument(d, true)"><app-icon name="user-minus"></app-icon>Retirar</button>
                   }</div></div>
             } @empty { <p class="muted">No hay fuentes registradas.</p> }
           </section>
@@ -636,13 +638,13 @@
             <aside class="chat-history" [class.open]="historyOpen" aria-label="Historial de chats">
               <div class="history-head"><strong>Tus chats</strong>
                 <button type="button" class="icon-button" (click)="historyOpen = false" aria-label="Ocultar historial">×</button></div>
-              <button type="button" class="primary wide-button" (click)="newChat()" [disabled]="asking">＋ Nuevo chat</button>
+              <button type="button" class="primary wide-button" (click)="newChat()" [disabled]="asking"><app-icon name="plus"></app-icon>Nuevo chat</button>
               <div class="history-list">
                 @for (c of chats; track c.id) {
                   <div class="history-item" [class.active]="+c.id === chatId">
                     <button type="button" class="history-open" (click)="openChat(+c.id)"><span>{{ c.title }}</span><small>{{ chatDay(c.updated_at) }}</small></button>
                     <button type="button" class="icon-button danger-text" (click)="deleteChat(c)" [attr.aria-label]="'Eliminar ' + c.title" title="Eliminar chat">
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+                      <app-icon name="trash"></app-icon></button>
                   </div>
                 } @empty { <p class="muted">Aún no tienes chats guardados.</p> }
               </div>
@@ -651,9 +653,9 @@
 
             <section class="chat-panel">
               <header class="chat-top">
-                <button type="button" class="secondary small" (click)="historyOpen = !historyOpen" [attr.aria-expanded]="historyOpen">☰ Historial</button>
+                <button type="button" class="secondary small" (click)="historyOpen = !historyOpen" [attr.aria-expanded]="historyOpen"><app-icon name="clock"></app-icon>Historial</button>
                 <strong class="chat-title">{{ chatTitle }}</strong>
-                <button type="button" class="secondary small" (click)="newChat()" [disabled]="asking || (!messages.length && !chatId)">＋ Nuevo</button>
+                <button type="button" class="secondary small" (click)="newChat()" [disabled]="asking || (!messages.length && !chatId)"><app-icon name="chat"></app-icon>Nuevo</button>
               </header>
               <div class="chat-scroll" #chatScroll>
                 @if (!messages.length) {
@@ -663,7 +665,7 @@
                 @for (m of messages; track $index) {
                   <article class="message" [class.mine]="m.author === 'Tú'">
                     <strong class="who">{{ m.author === 'Tú' ? 'Tú' : 'Asistente' }}</strong>
-                    @if (m.attachment) { <span class="file-chip">📎 {{ m.attachment }}</span> }
+                    @if (m.attachment) { <span class="file-chip"><app-icon name="clip"></app-icon>{{ m.attachment }}</span> }
                     @if (m.html) { <div class="md" [innerHTML]="m.html"></div> }
                     @else if (m.pending) { <p class="typing" role="status">Escribiendo<span>.</span><span>.</span><span>.</span></p> }
                     @else { <p>{{ m.text }}</p> }
@@ -672,17 +674,17 @@
               </div>
               <form class="chat-form" (ngSubmit)="ask()">
                 @if (attachment || attachBusy) {
-                  <div class="attach-row"><span class="file-chip">📎 {{ attachBusy ? 'Leyendo archivo…' : attachment!.name }}</span>
+                  <div class="attach-row"><span class="file-chip"><app-icon name="clip"></app-icon>{{ attachBusy ? 'Leyendo archivo…' : attachment!.name }}</span>
                     @if (attachment) { <button type="button" class="icon-button" (click)="attachment = undefined" aria-label="Quitar archivo">×</button> }</div>
                 }
                 <div class="chat-input">
                   <label class="attach-button" title="Adjuntar archivo" aria-label="Adjuntar archivo">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
+                    <app-icon name="clip" [size]="22"></app-icon>
                     <input type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.webp,.txt,.csv,.md" (change)="chooseAttachment($event)" [disabled]="asking">
                   </label>
                   <textarea name="question" rows="1" aria-label="Escribe tu mensaje" [(ngModel)]="question" (keydown)="chatKeydown($event)"
                     placeholder="Escribe tu mensaje…"></textarea>
-                  <button class="primary send" type="submit" [disabled]="asking || attachBusy || (!question.trim() && !attachment)" aria-label="Enviar">➤</button>
+                  <button class="primary send" type="submit" [disabled]="asking || attachBusy || (!question.trim() && !attachment)" aria-label="Enviar"><app-icon name="send" [size]="20"></app-icon></button>
                 </div>
                 <small class="muted chat-hint">Enter para enviar · Shift + Enter para nueva línea · PDF, Word, Excel, imagen o texto (máx. 5 MB)</small>
               </form>
@@ -695,8 +697,8 @@
           <section class="panel profile-panel">
             <div class="profile-photo">
               @if (profileAvatar) { <img [src]="profileAvatar" alt="Tu foto de perfil"> } @else { <span class="avatar big">{{ initials }}</span> }
-              <label class="secondary-link file-label">Cambiar foto<input type="file" accept="image/png,image/jpeg,image/webp" (change)="choosePhoto($event)"></label>
-              @if (profileAvatar) { <button type="button" class="text-button danger-text" (click)="profileAvatar = ''">Quitar foto</button> }
+              <label class="secondary-link file-label"><app-icon name="camera"></app-icon>Cambiar foto<input type="file" accept="image/png,image/jpeg,image/webp" (change)="choosePhoto($event)"></label>
+              @if (profileAvatar) { <button type="button" class="text-button danger-text" (click)="profileAvatar = ''"><app-icon name="trash"></app-icon>Quitar foto</button> }
             </div>
             <form class="profile-form" (ngSubmit)="saveProfile()">
               <label for="p-name">Nombre completo</label>
@@ -709,8 +711,8 @@
                 <div><dt>Rol</dt><dd>{{ roleLabel }}</dd></div>
               </dl>
               <div class="actions">
-                <button type="submit" class="primary" [disabled]="profileSaving">{{ profileSaving ? 'Guardando…' : 'Guardar cambios' }}</button>
-                <button type="button" class="secondary" (click)="changeMyPassword()">Cambiar mi contraseña</button>
+                <button type="submit" class="primary" [disabled]="profileSaving"><app-icon name="check"></app-icon>{{ profileSaving ? 'Guardando…' : 'Guardar cambios' }}</button>
+                <button type="button" class="secondary" (click)="changeMyPassword()"><app-icon name="key"></app-icon>Cambiar mi contraseña</button>
               </div>
             </form>
           </section>
@@ -727,9 +729,9 @@
   @if (dialog && auth.user()) {
     <div class="modal-backdrop">
       <section class="modal" [class.danger]="dialog.danger" role="dialog" aria-modal="true" aria-labelledby="modal-title" (keydown.escape)="closeDialog()">
-        <header><h2 id="modal-title">{{ dialog.title }}</h2><button type="button" (click)="closeDialog()" [disabled]="saving" aria-label="Cerrar">×</button></header>
-        @if (dialog.intro) { <p class="intro">{{ dialog.intro }}</p> }
-        @if (dialog.warning) { <p class="warning" role="note">⚠ {{ dialog.warning }}</p> }
+        <header><h2 id="modal-title"><app-icon [name]="dialog.danger ? 'alert' : 'edit'" [size]="22"></app-icon><span [innerHTML]="fmt(dialog.title)"></span></h2><button type="button" (click)="closeDialog()" [disabled]="saving" aria-label="Cerrar">×</button></header>
+        @if (dialog.intro) { <p class="intro" [innerHTML]="fmt(dialog.intro)"></p> }
+        @if (dialog.warning) { <p class="warning" role="note"><app-icon name="alert" [size]="20"></app-icon><span [innerHTML]="fmt(dialog.warning)"></span></p> }
         <form (ngSubmit)="submitDialog()" novalidate>
           @for (field of dialog.fields; track field.key) {
             @if (field.type === 'choice') {
@@ -753,13 +755,13 @@
                   @for (o of field.options || []; track o.value) { <option [value]="o.value">{{ o.label }}</option> }
                 </select>
               } @else if (field.type === 'textarea') {
-                <textarea [id]="'f_' + field.key" [name]="field.key" rows="4" [(ngModel)]="dialog.values[field.key]"></textarea>
+                <textarea [id]="'f_' + field.key" [name]="field.key" rows="4" [(ngModel)]="dialog.values[field.key]" [placeholder]="field.placeholder || ''"></textarea>
               } @else if (field.type === 'file') {
                 <input [id]="'f_' + field.key" type="file" accept=".pdf,.doc,.docx,.xlsx,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg" (change)="chooseFile($event)">
               } @else if (field.type === 'password') {
                 <div class="password-box">
                   <input [id]="'f_' + field.key" [name]="field.key" [type]="shown[field.key] ? 'text' : 'password'" autocomplete="new-password"
-                    [(ngModel)]="dialog.values[field.key]">
+                    [(ngModel)]="dialog.values[field.key]" [placeholder]="field.placeholder || ''">
                   <button type="button" class="eye" (click)="shown[field.key] = !shown[field.key]"
                     [attr.aria-label]="shown[field.key] ? 'Ocultar contraseña' : 'Mostrar contraseña'" [attr.aria-pressed]="!!shown[field.key]">
                     @if (shown[field.key]) {
@@ -773,14 +775,14 @@
                   <small class="strength" [class.ok]="passwordOk(dialog.values[field.key])">{{ passwordOk(dialog.values[field.key]) ? '✓ Contraseña válida' : 'Aún no cumple: 8+ caracteres, mayúscula, minúscula y número' }}</small>
                 }
               } @else {
-                <input [id]="'f_' + field.key" [name]="field.key" [type]="field.type" [attr.min]="field.min || null" [(ngModel)]="dialog.values[field.key]"
+                <input [id]="'f_' + field.key" [name]="field.key" [type]="field.type" [attr.min]="field.min || null" [(ngModel)]="dialog.values[field.key]" [placeholder]="field.placeholder || ''"
                   [attr.autocapitalize]="field.key === 'username' ? 'none' : null">
               }
             }
             @if (field.hint && field.type !== 'password') { <small class="hint">{{ field.hint }}</small> }
             @if (field.hint && field.type === 'password' && !dialog.values[field.key]) { <small class="hint">{{ field.hint }}</small> }
           }
-          @if (dialogError) { <p class="error" role="alert">{{ dialogError }}</p> }
+          @if (dialogError) { <p class="error" role="alert" [innerHTML]="fmt(dialogError)"></p> }
           <footer>
             <button class="secondary" type="button" [disabled]="saving" (click)="closeDialog()">Volver</button>
             <button [class]="dialog.danger ? 'danger' : 'primary'" type="submit" [disabled]="saving">{{ saving ? 'Guardando…' : dialog.confirmLabel }}</button>

@@ -16,6 +16,7 @@ import {
 import { ApiService } from '../services/api.service';
 import { BackendService } from '../services/backend.service';
 import { extractOfficeText } from '../services/file-text';
+import { IconComponent } from './icon.component';
 import { AuthService } from '../auth/auth.service';
 import { AppNotification, NotificationsService } from '../services/notifications.service';
 
@@ -34,6 +35,8 @@ export interface DialogField {
   requiredWhen?: (values: Row) => boolean;
   options?: Option[];
   hint?: string;
+  /** Texto gris dentro de la caja que desaparece al escribir. */
+  placeholder?: string;
   min?: string;
 }
 export interface Dialog {
@@ -57,7 +60,7 @@ const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,72}$/;
 @Component({
   selector: 'app-platform',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, IonicModule],
+  imports: [CommonModule, FormsModule, RouterLink, IonicModule, IconComponent],
   templateUrl: './platform.page.html',
   styleUrls: ['./platform.page.scss'],
 })
@@ -176,6 +179,10 @@ export class PlatformPage implements OnInit {
   get proposalFilterList(): Option[] { return proposalFilters(this.role); }
 
   status(kind: StatusKind, value: unknown): StatusInfo { return statusInfo(kind, value); }
+  tabIcon(tab: string): string {
+    return ({ Resumen: 'info', Equipo: 'users', Actividades: 'tasks', Hitos: 'flag', Documentos: 'file', Historial: 'clock' } as Record<string, string>)[tab] || 'info';
+  }
+  statIcon(label: string): string { return /completad/i.test(label) ? 'check' : /propuesta/i.test(label) ? 'proposal' : 'folder'; }
   roleName(role: unknown): string { return ROLE_LABELS[role as Role] || String(role ?? ''); }
   date(value: unknown): string {
     if (!value) return 'Sin definir';
@@ -545,7 +552,27 @@ export class PlatformPage implements OnInit {
   // =====================================================================
   // Diálogo único: abrir, validar y guardar
   // =====================================================================
+  /** Texto normal con «nombres» resaltados en negrita y cursiva (sin mostrar los símbolos). */
+  fmt(text: unknown): string {
+    const esc = String(text ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+    return esc.replace(/«([^»\n]+)»/g, '<strong><em>$1</em></strong>');
+  }
+
+  /** Ejemplos dentro de las cajas de texto cuando el campo no trae uno propio. */
+  private readonly placeholders: Record<string, string> = {
+    title: 'Ej.: Calidad del agua en comunidades rurales', description: 'Describe en pocas líneas de qué trata…',
+    objectives: 'Ej.: Analizar…, Proponer…, Evaluar…', justification: 'Explica por qué esta propuesta debe aprobarse directamente…',
+    reason: 'Escribe el motivo…', observations: 'Escribe tus comentarios para la otra persona…', note: 'Escribe una nota…',
+    comment: 'Ej.: Adjunto la versión final del informe', name: 'Nombre y apellidos', username: 'Ej.: ana.lopez',
+    email: 'nombre@correo.com', project_role: 'Ej.: Tesista, analista de datos', description_short: 'Ej.: Foto de la toma de muestra',
+    version_note: 'Ej.: Corregí la sección de resultados', current_password: 'Tu contraseña actual', new_password: 'Mínimo 8 caracteres',
+    password: 'Mínimo 8 caracteres',
+  };
+
   openDialog(dialog: Dialog): void {
+    for (const field of dialog.fields) {
+      if (!field.placeholder && this.placeholders[field.key]) field.placeholder = this.placeholders[field.key];
+    }
     this.dialog = dialog;
     this.dialogError = '';
     this.dialogFile = undefined;
@@ -1196,9 +1223,10 @@ export class PlatformPage implements OnInit {
   deleteUser(user: Row): void {
     this.openDialog({
       title: 'Eliminar usuario definitivamente', confirmLabel: 'Sí, eliminar para siempre', danger: true, values: {},
-      warning: `¿Segura que quieres eliminar a ${user['name']} (${user['username']})? Esto NO se puede deshacer: ya no podrá entrar y se borran sus datos personales. ` +
-        'Si participó en proyectos, su historial queda como «Usuario eliminado». Si solo quieres quitarle el acceso por un tiempo, mejor desactívala en Editar.',
-      fields: [{ key: 'confirm', label: `Escribe ELIMINAR para confirmar`, type: 'text', required: true }],
+      warning: `¿Segura que quieres eliminar a «${user['name']}»${String(user['username']).toLowerCase() !== String(user['name']).toLowerCase() ? ' (usuario ' + user['username'] + ')' : ''}? ` +
+        'Esto NO se puede deshacer: ya no podrá entrar y se borran sus datos personales. Si participó en proyectos, en su historial aparecerá como «Usuario eliminado». ' +
+        'Si solo quieres quitarle el acceso por un tiempo, mejor desactiva la cuenta en Editar.',
+      fields: [{ key: 'confirm', label: 'Para confirmar, escribe la palabra ELIMINAR', type: 'text', required: true, placeholder: 'ELIMINAR' }],
       submit: async values => {
         if (String(values['confirm']).trim().toUpperCase() !== 'ELIMINAR') throw new Error('Escribe ELIMINAR para confirmar.');
         const result = await this.post('users/delete.php', { user_id: user['id'] });
@@ -1610,14 +1638,16 @@ export class PlatformPage implements OnInit {
   // =====================================================================
   startRecovery(): void {
     this.loginMode = 'forgot';
-    this.recoverId = this.username.trim();
+    this.recoverId = this.username.includes('@') ? this.username.trim() : '';
     this.recoverInfo = ''; this.loginError = ''; this.loginInfo = '';
   }
   backToLogin(): void { this.loginMode = 'login'; this.recoverInfo = ''; this.loginError = ''; }
 
   async requestCode(): Promise<void> {
     if (this.recoverBusy) return;
-    if (!this.recoverId.trim()) { this.loginError = 'Escribe tu usuario o tu correo.'; return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(this.recoverId.trim())) {
+      this.loginError = 'Escribe el correo completo de tu cuenta, por ejemplo nombre@correo.com.'; return;
+    }
     this.recoverBusy = true; this.loginError = ''; this.recoverInfo = '';
     try {
       const result = await this.backend.callFunction<Row>('asistente', { action: 'password-reset', identifier: this.recoverId.trim() }, 30000);
@@ -1645,7 +1675,7 @@ export class PlatformPage implements OnInit {
         { identifier: this.recoverId.trim(), code: this.recoverCode.replace(/\s/g, ''), password: this.recoverPassword }, 15000);
       if (result.status >= 300) throw new Error(result.body?.['message'] || 'No se pudo cambiar la contraseña.');
       this.loginMode = 'login';
-      this.username = this.recoverId.includes('@') ? '' : this.recoverId.trim();
+      this.username = '';
       this.password = '';
       this.loginInfo = 'Contraseña actualizada. Ya puedes iniciar sesión.';
     } catch (error) {

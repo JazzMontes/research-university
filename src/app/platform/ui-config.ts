@@ -7,19 +7,19 @@ export const ROLE_LABELS: Record<Role, string> = {
   coordinator: 'Coordinador',
 };
 
-export interface Section { key: string; title: string; roles: Role[]; menu: boolean; }
+export interface Section { key: string; title: string; roles: Role[]; menu: boolean; icon: string; }
 
 const ALL: Role[] = ['student', 'researcher', 'coordinator'];
 
 export const SECTIONS: Section[] = [
-  { key: 'dashboard', title: 'Inicio', roles: ALL, menu: true },
-  { key: 'proposals', title: 'Propuestas', roles: ALL, menu: true },
-  { key: 'projects', title: 'Proyectos', roles: ALL, menu: true },
-  { key: 'activities', title: 'Actividad', roles: ALL, menu: false },
-  { key: 'users', title: 'Usuarios', roles: ['coordinator'], menu: true },
-  { key: 'institutional', title: 'Fuentes institucionales', roles: ALL, menu: true },
-  { key: 'assistant', title: 'Asistente de IA', roles: ALL, menu: true },
-  { key: 'profile', title: 'Mi perfil', roles: ALL, menu: true },
+  { key: 'dashboard', title: 'Inicio', roles: ALL, menu: true, icon: 'home' },
+  { key: 'proposals', title: 'Propuestas', roles: ALL, menu: true, icon: 'proposal' },
+  { key: 'projects', title: 'Proyectos', roles: ALL, menu: true, icon: 'folder' },
+  { key: 'activities', title: 'Actividad', roles: ALL, menu: false, icon: 'tasks' },
+  { key: 'users', title: 'Usuarios', roles: ['coordinator'], menu: true, icon: 'users' },
+  { key: 'institutional', title: 'Fuentes institucionales', roles: ALL, menu: true, icon: 'book' },
+  { key: 'assistant', title: 'Asistente de IA', roles: ALL, menu: true, icon: 'sparkles' },
+  { key: 'profile', title: 'Mi perfil', roles: ALL, menu: true, icon: 'user' },
 ];
 
 export function sectionAllowed(key: string, role: Role): boolean {
