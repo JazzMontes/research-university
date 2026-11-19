@@ -118,3 +118,11 @@ Pendiente → Entregar → En revisión → Aceptar (**Completada**) o Pedir cam
 - Las cajas de texto muestran un ejemplo gris que desaparece al escribir.
 - Eliminar usuario ya no repite el nombre cuando el usuario y el nombre son iguales.
 - "¿Olvidaste tu contraseña?" pide el correo completo y lo valida.
+
+## Versión 3.13
+
+- **Cancelar propuesta**: ahora es una tarjeta roja clara al final del detalle, con el aviso de qué pasará. Se puede cancelar aunque ya esté **aprobada** (por el autor o Coordinación): en ese caso también se cancela su proyecto. Reactivarla reabre el proyecto. Un proyecto ya completado no se puede cancelar.
+- **Reporte en PDF**: el reporte del proyecto y el general se descargan como PDF con portada, tablas, colores de estado y número de página.
+- **Actividades con archivo**: al crear o editar una actividad se puede adjuntar material de apoyo opcional (guía, formato, etc.), que se descarga desde el detalle de la actividad.
+- **Hitos y actividades juntos**: la pestaña «Hitos» desaparece; «Actividades» muestra el **Plan de trabajo**, cada hito con su barra de avance y sus actividades, y al final las que no tienen hito. Cada actividad elige su hito al crearla, o se agrega con el botón «Actividad» dentro del hito.
+- Requiere ejecutar `supabase/instalar_todo.sql`.

@@ -404,7 +404,8 @@ begin
     perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Te pidieron cambios en «' || t || '»', new.details, link, 'changes');
   elsif new.action = 'review_rejected' then
     perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Tu propuesta «' || t || '» fue rechazada', new.details, link, 'cancelled');
-  elsif new.action = 'cancelled' then
+  elsif new.action = 'cancelled' and coalesce(new.previous_status, '') <> 'approved' then
+    -- (Si ya era proyecto, el aviso lo manda el proyecto cancelado a todo el equipo.)
     perform research.notify(array_remove(array[x.author_id, x.responsible_researcher_id], new.actor_id), 'Se canceló la propuesta «' || t || '»', new.details, link, 'cancelled');
   elsif new.action = 'researcher_changed' then
     perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Cambió el investigador responsable de «' || t || '»', new.details, link, 'changes');

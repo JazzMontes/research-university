@@ -358,9 +358,23 @@
                 <button type="button" class="secondary" (click)="changeProposalResearcher()"><app-icon name="swap"></app-icon>Cambiar investigador</button>
               }
               @if (canRequestProposalChange) { <button type="button" class="secondary" (click)="requestResearcherChange('proposal')"><app-icon name="swap"></app-icon>Solicitar cambio de investigador</button> }
-              @if (canCancelProposal) { <button type="button" class="danger-outline" (click)="cancelProposal()"><app-icon name="ban"></app-icon>Cancelar propuesta</button> }
             </div>
           </section>
+
+          @if (canCancelProposal) {
+            <section class="danger-zone">
+              <div class="danger-icon"><app-icon name="ban" [size]="24"></app-icon></div>
+              <div class="danger-text-block">
+                <h3>{{ proposal['status'] === 'approved' ? 'Cancelar propuesta y su proyecto' : 'Cancelar propuesta' }}</h3>
+                <p>{{ cancelConsequence }}</p>
+              </div>
+              <button type="button" class="danger" (click)="cancelProposal()"><app-icon name="ban"></app-icon>Cancelar propuesta</button>
+            </section>
+          }
+          @if (proposal['status'] === 'cancelled' && proposal['project_id']) {
+            <div class="callout tone-cancelled"><strong><app-icon name="ban"></app-icon>Su proyecto también está cancelado</strong>
+              <p>Al reactivar la propuesta, el proyecto se reabre.</p></div>
+          }
 
           <section class="panel"><h2>Historial</h2>
             <ol class="timeline scroll-box">
@@ -418,7 +432,6 @@
               <button type="button" role="tab" [attr.aria-selected]="tab === t" [class.active]="tab === t" (click)="setTab(t)"><app-icon [name]="tabIcon(t)" [size]="16"></app-icon>{{ t }}
                 @if (t === 'Equipo') { <span class="count">{{ activeMembers.length }}</span> }
                 @if (t === 'Actividades') { <span class="count">{{ activities.length }}</span> }
-                @if (t === 'Hitos') { <span class="count">{{ milestones.length }}</span> }
                 @if (t === 'Documentos') { <span class="count">{{ documents.length }}</span> }
               </button>
             }
@@ -477,34 +490,54 @@
 
           } @else if (tab === 'Actividades') {
             <section class="panel tab-panel">
-              <div class="panel-head"><h2>Actividades</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="activityForm()"><app-icon name="plus"></app-icon>Nueva actividad</button> }</div>
+              <div class="panel-head"><h2><app-icon name="tasks"></app-icon>Plan de trabajo</h2>
+                @if (isLead && projectEditable) {
+                  <div class="row-actions">
+                    <button type="button" class="secondary" (click)="milestoneForm()"><app-icon name="flag"></app-icon>Nuevo hito</button>
+                    <button type="button" class="primary" (click)="activityForm()"><app-icon name="plus"></app-icon>Nueva actividad</button>
+                  </div>
+                }
+              </div>
+              <p class="muted plan-help">Organiza las actividades en hitos (etapas). Cada hito se marca como alcanzado solo cuando todas sus actividades están completadas.</p>
               @if (activities.length > 3) { <input class="tab-search" type="search" aria-label="Buscar actividad" [(ngModel)]="activityFilter" placeholder="Buscar actividad o responsable…"> }
-              @for (a of visibleActivities; track a.id) {
-                <a class="list-row" [class.muted-row]="a.status === 'cancelled'" [routerLink]="['/app/activities', a.id]">
-                  <div><strong>{{ a.description }}</strong><small>{{ a.participant_name }} · vence {{ date(a.deadline) }}
-                    @if (+a.evidence_count) { · {{ a.evidence_count }} evidencia(s) }</small></div>
-                  @if (a.deadline_status === 'Retrasada' || a.deadline_status === 'Próxima a vencer') {
-                    <span class="badge" [class]="'badge tone-' + deadlineTone(a.deadline_status)">{{ a.deadline_status }}</span>
-                  }
-                  <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
-                </a>
-              } @empty { <p class="muted">Todavía no hay actividades. @if (isLead && projectEditable) { Crea la primera con <strong><em>Nueva actividad</em></strong>. }</p> }
-            </section>
-
-          } @else if (tab === 'Hitos') {
-            <section class="panel tab-panel">
-              <div class="panel-head"><h2>Hitos</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="milestoneForm()"><app-icon name="plus"></app-icon>Nuevo hito</button> }</div>
-              <p class="muted">Un hito se marca como alcanzado automáticamente cuando todas sus actividades están completadas.</p>
-              @for (m of milestones; track m.id) {
-                <div class="list-row">
-                  <div><strong>{{ m.description }}</strong><small>Meta: {{ date(m.target_date) }} · {{ m.completed_count }} de {{ m.activity_count }} actividades completadas</small></div>
-                  <span class="badge" [class]="'badge tone-' + status('milestone', m.status).tone">{{ status('milestone', m.status).label }}</span>
-                  @if (isLead && projectEditable) {
-                    <div class="row-actions"><button type="button" class="text-button" (click)="milestoneForm(m)"><app-icon name="edit"></app-icon>Editar</button>
-                    <button type="button" class="text-button danger-text" (click)="deleteMilestone(m)"><app-icon name="trash"></app-icon>Eliminar</button></div>
+              @for (g of activityGroups; track g.milestone?.id ?? 'none') {
+                <div class="milestone-group" [class.loose]="!g.milestone">
+                  <header class="milestone-head">
+                    @if (g.milestone) {
+                      <span class="milestone-flag" [class]="'milestone-flag tone-' + status('milestone', g.milestone.status).tone"><app-icon [name]="g.milestone.status === 'achieved' ? 'flag-done' : 'flag'"></app-icon></span>
+                      <div class="milestone-info">
+                        <strong>{{ g.milestone.description }}</strong>
+                        <small><app-icon name="calendar" [size]="13"></app-icon> Meta {{ date(g.milestone.target_date) }} · {{ g.milestone.completed_count }} de {{ g.milestone.activity_count }} completadas</small>
+                        <span class="bar small-bar"><span class="bar-fill" [style.width.%]="milestonePercent(g.milestone)"></span></span>
+                      </div>
+                      <span class="badge" [class]="'badge tone-' + status('milestone', g.milestone.status).tone">{{ status('milestone', g.milestone.status).label }}</span>
+                      @if (isLead && projectEditable) {
+                        <div class="row-actions">
+                          <button type="button" class="text-button" (click)="activityForm(undefined, +g.milestone.id)"><app-icon name="plus"></app-icon>Actividad</button>
+                          <button type="button" class="text-button" (click)="milestoneForm(g.milestone)"><app-icon name="edit"></app-icon>Editar</button>
+                          <button type="button" class="text-button danger-text" (click)="deleteMilestone(g.milestone)"><app-icon name="trash"></app-icon>Eliminar</button>
+                        </div>
+                      }
+                    } @else {
+                      <span class="milestone-flag tone-neutral"><app-icon name="tasks"></app-icon></span>
+                      <div class="milestone-info"><strong>{{ milestones.length ? 'Actividades sin hito' : 'Actividades' }}</strong></div>
+                    }
+                  </header>
+                  @for (a of g.items; track a.id) {
+                    <a class="list-row" [class.muted-row]="a.status === 'cancelled'" [routerLink]="['/app/activities', a.id]">
+                      <div><strong>{{ a.description }}</strong><small><app-icon name="user" [size]="13"></app-icon> {{ a.participant_name }} · vence {{ date(a.deadline) }}
+                        @if (+a.evidence_count) { · <app-icon name="clip" [size]="13"></app-icon>{{ a.evidence_count }} evidencia(s) }
+                        @if (a.materials?.length) { · <app-icon name="file" [size]="13"></app-icon>material }</small></div>
+                      @if (a.deadline_status === 'Retrasada' || a.deadline_status === 'Próxima a vencer') {
+                        <span class="badge" [class]="'badge tone-' + deadlineTone(a.deadline_status)">{{ a.deadline_status }}</span>
+                      }
+                      <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
+                    </a>
+                  } @empty {
+                    <p class="muted empty-group">{{ g.milestone ? 'Este hito todavía no tiene actividades.' : 'Todavía no hay actividades.' }}</p>
                   }
                 </div>
-              } @empty { <p class="muted">Todavía no hay hitos.</p> }
+              }
             </section>
 
           } @else if (tab === 'Documentos') {
@@ -562,7 +595,7 @@
             <dl class="details">
               <div><dt>Fecha límite</dt><dd>{{ date(activity['deadline']) }}
                 @if (activity['deadline_status'] !== 'Normal') { <span class="badge" [class]="'badge tone-' + deadlineTone(activity['deadline_status'])">{{ activity['deadline_status'] }}</span> }</dd></div>
-              <div><dt>Hitos</dt><dd>{{ activity['milestones']?.length ? activity['milestones'].join(', ') : 'Ninguno' }}</dd></div>
+              <div><dt>Hito</dt><dd>{{ activity['milestones']?.length ? activity['milestones'].join(', ') : 'Sin hito' }}</dd></div>
             </dl>
             <div class="actions">
               @if (activityEditable && activityMine && ['pending','changes'].includes(activity['status'])) {
@@ -578,6 +611,14 @@
             </div>
           </section>
 
+          @if (activity['materials']?.length) {
+            <section class="panel"><h2><app-icon name="file"></app-icon>Material de apoyo</h2>
+              @for (f of activity['materials']; track f.id) {
+                <div class="file-row"><div><strong>{{ f.title }}</strong><small>{{ f.filename }} · {{ f.uploaded_by_name }} · {{ date(f.updated_at) }}</small></div>
+                  <button type="button" class="text-button" (click)="download('documents', f.id)"><app-icon name="download"></app-icon>Descargar</button></div>
+              }
+            </section>
+          }
           <section class="panel tab-panel short"><h2>Evidencias</h2>
             @for (e of evidence; track e.id) {
               <div class="file-row"><div><strong>{{ e.title }}</strong><small>{{ e.filename }} · {{ e.uploaded_by_name }} · {{ date(e.updated_at) }}</small></div>

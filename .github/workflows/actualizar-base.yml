@@ -1,5 +1,5 @@
 # Aplica los cambios de la base de datos en Supabase cada vez que subes (push)
-# un cambio en los archivos supabase/01..07 a main o master.
+# un cambio en los archivos supabase/01..09 a main o master.
 # Los scripts se pueden ejecutar varias veces: crean lo que falta y recrean funciones, NO borran datos.
 # Todo vive en el esquema "research", así que puede compartir proyecto de Supabase con otra app.
 #
@@ -35,11 +35,11 @@ jobs:
             echo "::error::Falta el secreto SUPABASE_DB_URL (Session pooler de Supabase)."; exit 1
           fi
 
-      - name: Aplicar 01..07 en una sola transacción
+      - name: Aplicar 01..09 en una sola transacción
         run: |
           # Si algo falla, se revierte todo y la base queda como estaba.
           ARGS=()
-          for f in $(ls supabase/0[1-7]_*.sql | sort); do echo "→ $f"; ARGS+=(-f "$f"); done
+          for f in $(ls supabase/0[1-9]_*.sql | sort); do echo "→ $f"; ARGS+=(-f "$f"); done
           psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -q "${ARGS[@]}"
 
       - name: Comprobar la API

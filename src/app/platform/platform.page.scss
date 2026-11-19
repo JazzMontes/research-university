@@ -311,6 +311,27 @@ nav a.active app-icon { opacity: 1; }
 .callout strong { display: flex; align-items: center; }
 .file-chip { display: inline-flex; align-items: center; }
 .file-chip app-icon { margin-right: 5px; }
+
+/* Zona para cancelar la propuesta */
+.danger-zone { display: flex; align-items: center; gap: 16px; background: #fff7f7; border: 1px solid #f1c4c4; border-radius: 12px; padding: 18px 20px; margin-bottom: 22px; }
+.danger-icon { width: 48px; height: 48px; border-radius: 12px; background: #ffe1e1; color: #b23b3b; display: grid; place-items: center; flex-shrink: 0; }
+.danger-text-block { flex: 1; min-width: 0; }
+.danger-text-block h3 { margin: 0 0 4px; color: #8f2e2e; }
+.danger-text-block p { margin: 0; font-size: 13.5px; color: #6d3a3a; }
+.danger-zone .danger { flex-shrink: 0; }
+
+/* Plan de trabajo: hitos con sus actividades */
+.plan-help { font-size: 13px; margin: -4px 0 12px; }
+.milestone-group { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; overflow: hidden; }
+.milestone-group.loose { border-style: dashed; }
+.milestone-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: #f5faf7; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.milestone-flag { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; flex-shrink: 0; border: 1px solid transparent; }
+.milestone-info { flex: 1; min-width: 180px; display: grid; gap: 4px; }
+.milestone-info small { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.small-bar { height: 6px; max-width: 260px; }
+.milestone-group .list-row { padding: 12px 14px; }
+.milestone-group .list-row small app-icon { margin: 0 2px 0 0; }
+.empty-group { padding: 12px 14px; margin: 0; font-size: 13px; }
 /* Diálogo */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: #082b2780; display: grid; place-items: center; padding: 22px; }
 .modal { background: white; border-radius: 14px; width: min(620px, 100%); max-height: 90vh; overflow-y: auto; padding: 26px 28px; box-shadow: 0 15px 80px #123c3433; border-top: 6px solid var(--green); }
@@ -344,7 +365,7 @@ nav a.active app-icon { opacity: 1; }
   .scrim { display: block; position: fixed; inset: 0; z-index: 30; background: #113d3860; border-radius: 0; }
   main { padding: 18px; } .menu-button { display: block; padding: 7px; } .breadcrumb { font-weight: 600; } .topbar { gap: 10px; }
   .profile { margin-left: auto; } .profile strong { display: none; }
-  .stats { grid-template-columns: 1fr; gap: 10px; } .charts, .charts.two { grid-template-columns: 1fr; } .donut { width: 110px; height: 110px; }
+  .stats { grid-template-columns: 1fr; gap: 10px; } .danger-zone { flex-wrap: wrap; } .danger-zone .danger { width: 100%; } .charts, .charts.two { grid-template-columns: 1fr; } .donut { width: 110px; height: 110px; }
   .bell-panel { position: fixed; right: 8px; left: 8px; top: 64px; width: auto; } .stat { flex-direction: row; align-items: center; gap: 14px; padding: 14px 18px; } .stat strong { font-size: 24px; }
   .heading { flex-wrap: wrap; margin-bottom: 20px; } .heading p { font-size: 14px; } .heading > button { width: 100%; }
   .tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 5px; } .tabs button, .chips button { flex-shrink: 0; }

@@ -896,6 +896,7 @@ set search_path = research, extensions, pg_temp as $$
     'author_name', (select name from research.users where id = p.author_id),
     'author_role', (select role from research.users where id = p.author_id),
     'project_id', (select id from research.projects where proposal_id = p.id),
+    'project_status', (select status from research.projects where proposal_id = p.id),
     'file', (select jsonb_build_object('document_id', dd.id, 'filename', v.filename, 'size_bytes', v.size_bytes)
              from research.documents dd join research.document_versions v on v.document_id = dd.id
              where dd.proposal_id = p.id and dd.deleted_at is null order by v.id desc limit 1),
@@ -972,7 +973,7 @@ create or replace function research.ep_proposals(u research.users, act text, d j
 returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
 declare
-  p research.proposals; pid integer; researcher integer; v_status text; before_s text; after_s text;
+  p research.proposals; pj research.projects; pid integer; researcher integer; v_status text; before_s text; after_s text;
   obs text; decision text; new_project integer; v_limit integer; v_page integer; v_total integer;
   v_search text; v_filter text; log_action text;
 begin
@@ -1084,11 +1085,23 @@ begin
   elsif act = 'cancel' then
     -- Error humano típico: se envió una propuesta por equivocación o ya no se hará.
     if not (p.author_id = u.id or u.role = 'coordinator') then perform research.fail(403, 'Solo el autor o Coordinación pueden cancelar la propuesta.'); end if;
-    if before_s in ('approved', 'rejected', 'cancelled') then
-      perform research.fail(409, case before_s when 'approved' then 'La propuesta ya es un proyecto; cancela el proyecto si ya no se realizará.'
-        when 'cancelled' then 'La propuesta ya está cancelada.' else 'La propuesta ya fue rechazada.' end);
+    if before_s in ('rejected', 'cancelled') then
+      perform research.fail(409, case before_s when 'cancelled' then 'La propuesta ya está cancelada.' else 'La propuesta ya fue rechazada.' end);
     end if;
     obs := research.req_text(d, 'reason', 2000);
+    -- Una propuesta aprobada ya es un proyecto: cancelarla también cancela el proyecto (si no se completó).
+    if before_s = 'approved' then
+      select * into pj from research.projects where proposal_id = pid for update;
+      if pj.status = 'finalized' then
+        perform research.fail(409, 'El proyecto de esta propuesta ya se completó; no se puede cancelar.');
+      end if;
+      if pj.id is not null and pj.status <> 'cancelled' then
+        update research.closures set status = 'changes_requested', review_observations = 'Propuesta cancelada: ' || obs,
+          reviewed_by = u.id, reviewed_at = now() where project_id = pj.id and status = 'pending';
+        update research.projects set status = 'cancelled', status_note = 'Se canceló la propuesta: ' || obs, updated_at = now() where id = pj.id;
+        perform research.event_project(pj.id, u.id, 'project', pj.id, 'cancelled', jsonb_build_object('reason', 'Se canceló la propuesta: ' || obs));
+      end if;
+    end if;
     after_s := 'cancelled';
     update research.proposals set status_before_cancel = before_s where id = pid;
     log_action := 'cancelled';
@@ -1099,6 +1112,17 @@ begin
     if before_s <> 'cancelled' then perform research.fail(409, 'La propuesta no está cancelada.'); end if;
     after_s := coalesce(p.status_before_cancel, case when (select role from research.users where id = p.author_id) = 'student'
                                                        then 'pending_researcher_review' else 'pending_coordinator' end);
+    -- Si era un proyecto, se reabre (solo si se canceló junto con la propuesta).
+    if after_s = 'approved' then
+      select * into pj from research.projects where proposal_id = pid for update;
+      if pj.id is not null and pj.status = 'cancelled' then
+        if not exists (select 1 from research.users where id = pj.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
+          perform research.fail(409, 'El investigador responsable del proyecto ya no está activo. Pide a Coordinación que lo cambie antes de reactivar.');
+        end if;
+        update research.projects set status = 'active', status_note = null, updated_at = now() where id = pj.id;
+        perform research.event_project(pj.id, u.id, 'project', pj.id, 'reopened', jsonb_build_object('before', 'cancelled', 'reason', 'Se reactivó la propuesta.'));
+      end if;
+    end if;
     if after_s = 'pending_researcher_review' then perform research.active_role(p.responsible_researcher_id, 'researcher'); end if;
     update research.proposals set status_before_cancel = null where id = pid;
     obs := 'Reactivada.';
@@ -1297,6 +1321,11 @@ begin
       reviewed_by = u.id, reviewed_at = now() where project_id = pid and status = 'pending';
     update research.projects set status = 'cancelled', status_note = v_reason, updated_at = now() where id = pid;
     perform research.event_project(pid, u.id, 'project', pid, 'cancelled', jsonb_build_object('reason', v_reason));
+    -- La propuesta de origen también queda cancelada (y vuelve a "Aprobada" si se reabre el proyecto).
+    if exists (select 1 from research.proposals where id = p.proposal_id and status = 'approved') then
+      update research.proposals set status = 'cancelled', status_before_cancel = 'approved', updated_at = now() where id = p.proposal_id;
+      perform research.proposal_history_add(p.proposal_id, u.id, 'cancelled', 'approved', 'cancelled', 'Se canceló el proyecto: ' || v_reason);
+    end if;
   elsif act = 'reopen' then
     -- Corrige un cierre o una cancelación hechos por error.
     if p.status not in ('finalized', 'cancelled') then perform research.fail(409, 'El proyecto ya está abierto.'); end if;
@@ -1306,6 +1335,11 @@ begin
     v_reason := research.req_text(d, 'reason', 2000);
     update research.projects set status = 'active', status_note = null, updated_at = now() where id = pid;
     perform research.event_project(pid, u.id, 'project', pid, 'reopened', jsonb_build_object('before', p.status, 'reason', v_reason));
+    -- Si el proyecto se había cancelado junto con su propuesta, la propuesta vuelve a "Aprobada".
+    if exists (select 1 from research.proposals where id = p.proposal_id and status = 'cancelled' and status_before_cancel = 'approved') then
+      update research.proposals set status = 'approved', status_before_cancel = null, updated_at = now() where id = p.proposal_id;
+      perform research.proposal_history_add(p.proposal_id, u.id, 'reactivated', 'cancelled', 'approved', 'Se reabrió el proyecto: ' || v_reason);
+    end if;
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;
@@ -1385,8 +1419,48 @@ set search_path = research, extensions, pg_temp as $$
     'deadline_status', research.deadline_status(a.status, a.deadline),
     'evidence_count', (select count(*) from research.documents dd where dd.activity_id = a.id and dd.kind = 'evidence' and dd.deleted_at is null),
     'milestones', (select coalesce(jsonb_agg(m.description), '[]') from research.milestone_activities ma
-                   join research.milestones m on m.id = ma.milestone_id where ma.activity_id = a.id));
+                   join research.milestones m on m.id = ma.milestone_id where ma.activity_id = a.id),
+    -- Cada actividad pertenece a un hito (o a ninguno): así se muestran juntos en el plan de trabajo.
+    'milestone_id', (select min(ma.milestone_id) from research.milestone_activities ma where ma.activity_id = a.id),
+    'materials', (select coalesce(jsonb_agg(jsonb_build_object('id', dd.id, 'title', dd.title, 'filename', v.filename,
+                    'uploaded_by_name', x.name, 'updated_at', v.created_at) order by dd.id), '[]')
+                  from research.documents dd
+                  join lateral (select * from research.document_versions vv where vv.document_id = dd.id order by vv.version desc limit 1) v on true
+                  join research.users x on x.id = v.uploaded_by
+                  where dd.activity_id = a.id and dd.kind = 'project' and dd.deleted_at is null));
 $$;
+
+-- Hito de la actividad: uno solo (o ninguno, con milestone_id vacío).
+create or replace function research.activity_set_milestone(pid integer, aid integer, d jsonb)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare mid integer;
+begin
+  if not (d ? 'milestone_id') then return; end if;
+  if coalesce(d ->> 'milestone_id', '') = '' then
+    delete from research.milestone_activities where activity_id = aid;
+    return;
+  end if;
+  mid := research.req_id(d, 'milestone_id');
+  if not exists (select 1 from research.milestones where id = mid and project_id = pid) then
+    perform research.fail(422, 'Ese hito no pertenece al proyecto.');
+  end if;
+  delete from research.milestone_activities where activity_id = aid;
+  insert into research.milestone_activities (milestone_id, activity_id) values (mid, aid);
+end $$;
+
+-- Material de apoyo opcional que el responsable adjunta a la actividad.
+create or replace function research.activity_material_save(pid integer, aid integer, actor integer, d jsonb)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare did integer;
+begin
+  if coalesce(d ->> 'file_base64', '') = '' then return; end if;
+  insert into research.documents (project_id, activity_id, title, kind, created_by)
+    values (pid, aid, coalesce(nullif(regexp_replace(research.req_text(d, 'filename', 255), '\.[^.]+$', ''), ''), 'Material de la actividad'), 'project', actor)
+    returning id into did;
+  perform research.save_version(did, actor, d);
+end $$;
 
 create or replace function research.ep_activities(u research.users, act text, d jsonb, is_post boolean)
 returns jsonb language plpgsql
@@ -1436,6 +1510,8 @@ begin
       update research.activities set description = research.req_text(d, 'description', 65535), participant_id = uid,
         deadline = v_deadline, updated_at = now() where id = eid;
     end if;
+    perform research.activity_set_milestone(pid, eid, d);
+    perform research.activity_material_save(pid, eid, u.id, d);
   elsif act = 'submit' then
     if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
     if a.participant_id <> u.id then perform research.fail(403, 'Solo la persona asignada puede entregar esta actividad.'); end if;
@@ -1512,7 +1588,7 @@ begin
   eid := m.id;
 
   if act in ('create', 'update') then
-    -- Las actividades son opcionales: se pueden vincular después.
+    -- Las actividades se vinculan desde cada actividad; si aquí no se mandan, se conservan las que ya tiene.
     x := coalesce(d -> 'activity_ids', '[]'::jsonb);
     if jsonb_typeof(x) in ('string', 'number') then x := jsonb_build_array(x); end if;
     if jsonb_typeof(x) <> 'array' then perform research.fail(422, 'Revisa las actividades del hito.'); end if;
@@ -1527,9 +1603,13 @@ begin
       if m.id is null then perform research.fail(404, 'Hito no disponible.'); end if;
       update research.milestones set description = research.req_text(d, 'description', 65535),
         target_date = research.req_date(d, 'target_date') where id = eid;
-      delete from research.milestone_activities where milestone_id = eid;
+      if d ? 'activity_ids' then delete from research.milestone_activities where milestone_id = eid; end if;
     end if;
-    insert into research.milestone_activities (milestone_id, activity_id) select eid, unnest(ids);
+    if d ? 'activity_ids' then
+      -- Una actividad pertenece a un solo hito: se quita de los demás.
+      delete from research.milestone_activities where activity_id = any(ids) and milestone_id <> eid;
+      insert into research.milestone_activities (milestone_id, activity_id) select eid, unnest(ids) on conflict do nothing;
+    end if;
   elsif act = 'delete' then
     -- Borrar un hito no toca sus actividades.
     if m.id is null then perform research.fail(404, 'Hito no disponible.'); end if;
@@ -2755,7 +2835,8 @@ begin
     perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Te pidieron cambios en «' || t || '»', new.details, link, 'changes');
   elsif new.action = 'review_rejected' then
     perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Tu propuesta «' || t || '» fue rechazada', new.details, link, 'cancelled');
-  elsif new.action = 'cancelled' then
+  elsif new.action = 'cancelled' and coalesce(new.previous_status, '') <> 'approved' then
+    -- (Si ya era proyecto, el aviso lo manda el proyecto cancelado a todo el equipo.)
     perform research.notify(array_remove(array[x.author_id, x.responsible_researcher_id], new.actor_id), 'Se canceló la propuesta «' || t || '»', new.details, link, 'cancelled');
   elsif new.action = 'researcher_changed' then
     perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Cambió el investigador responsable de «' || t || '»', new.details, link, 'changes');

@@ -17,6 +17,7 @@ import { ApiService } from '../services/api.service';
 import { BackendService } from '../services/backend.service';
 import { extractOfficeText } from '../services/file-text';
 import { IconComponent } from './icon.component';
+import { downloadReportPdf } from '../services/pdf-report';
 import { AuthService } from '../auth/auth.service';
 import { AppNotification, NotificationsService } from '../services/notifications.service';
 
@@ -96,7 +97,8 @@ export class PlatformPage implements OnInit {
   projects: Row[] = [];
   project?: Row;
   tab = 'Resumen';
-  readonly tabs = ['Resumen', 'Equipo', 'Actividades', 'Hitos', 'Documentos', 'Historial'];
+  // Hitos y actividades van juntos en la pestaña Actividades (plan de trabajo).
+  readonly tabs = ['Resumen', 'Equipo', 'Actividades', 'Documentos', 'Historial'];
   activities: Row[] = [];
   milestones: Row[] = [];
   documents: Row[] = [];
@@ -532,8 +534,15 @@ export class PlatformPage implements OnInit {
   }
   get isAuthor(): boolean { return Number(this.proposal?.['author_id']) === this.me; }
   get canCancelProposal(): boolean {
+    // También se puede cancelar ya aprobada (cancela su proyecto), salvo que el proyecto ya se haya completado.
     return !!this.proposal && (this.isAuthor || this.role === 'coordinator') &&
-      !['approved', 'rejected', 'cancelled'].includes(this.proposal['status']);
+      !['rejected', 'cancelled'].includes(this.proposal['status']) && this.proposal['project_status'] !== 'finalized';
+  }
+  get cancelConsequence(): string {
+    const p = this.proposal;
+    if (!p) return '';
+    if (p['status'] === 'approved') return 'Esta propuesta ya es un proyecto: al cancelarla también se cancela el proyecto y el equipo ya no podrá trabajar en él. Nada se borra y se puede reactivar.';
+    return 'Dejará de revisarse. Nada se borra: el autor o Coordinación pueden reactivarla y volverá al punto donde estaba.';
   }
   get proposalWaitingOn(): string {
     const p = this.proposal;
@@ -817,10 +826,15 @@ export class PlatformPage implements OnInit {
   cancelProposal(): void {
     const p = this.proposal!;
     this.openDialog({
-      title: 'Cancelar propuesta', confirmLabel: 'Sí, cancelar propuesta', danger: true, values: {},
-      warning: `«${p['title']}» dejará de revisarse. Si fue un error, el autor o Coordinación pueden reactivarla y volverá a donde estaba.`,
-      fields: [{ key: 'reason', label: 'Motivo', type: 'textarea', required: true }],
-      submit: async values => { await this.post('proposals/cancel.php', { proposal_id: p['id'], ...values }); return 'Propuesta cancelada.'; },
+      title: p['status'] === 'approved' ? 'Cancelar propuesta y su proyecto' : 'Cancelar propuesta', danger: true, values: {},
+      confirmLabel: p['status'] === 'approved' ? 'Sí, cancelar propuesta y proyecto' : 'Sí, cancelar propuesta',
+      warning: `¿Segura que quieres cancelar «${p['title']}»? ${this.cancelConsequence}`,
+      fields: [{ key: 'reason', label: 'Motivo de la cancelación', type: 'textarea', required: true,
+        placeholder: 'Ej.: Ya no se cuenta con los recursos para realizarla', hint: 'Lo verán el autor, el investigador responsable y el equipo.' }],
+      submit: async values => {
+        await this.post('proposals/cancel.php', { proposal_id: p['id'], ...values });
+        return p['status'] === 'approved' ? 'Propuesta y proyecto cancelados.' : 'Propuesta cancelada.';
+      },
     });
   }
 
@@ -828,7 +842,8 @@ export class PlatformPage implements OnInit {
     const p = this.proposal!;
     this.openDialog({
       title: 'Reactivar propuesta', confirmLabel: 'Reactivar', values: {}, fields: [],
-      intro: `«${p['title']}» vuelve al punto donde estaba antes de cancelarse.`,
+      intro: p['status_before_cancel'] === 'approved' ? `«${p['title']}» vuelve a estar aprobada y su proyecto se reabre.`
+        : `«${p['title']}» vuelve al punto donde estaba antes de cancelarse.`,
       submit: async () => { await this.post('proposals/reactivate.php', { proposal_id: p['id'] }); return 'Propuesta reactivada.'; },
     });
   }
@@ -940,7 +955,11 @@ export class PlatformPage implements OnInit {
   async downloadReport(general = false): Promise<void> {
     try {
       const data = general ? await this.post('reports/general.php', {}) : await this.post('reports/project.php', { project_id: this.project!['id'] });
-      this.showReport(data);
+      downloadReportPdf(data, {
+        projectStatus: v => this.status('project', v), activityStatus: v => this.status('activity', v),
+        milestoneStatus: v => this.status('milestone', v), role: r => this.roleName(r), date: d => this.date(d),
+      });
+      this.say('Reporte descargado en PDF.');
     } catch (error) { this.say(this.message(error, 'No se pudo generar el reporte.'), 'error'); }
   }
 
@@ -1006,26 +1025,51 @@ export class PlatformPage implements OnInit {
   // =====================================================================
   // Actividades
   // =====================================================================
-  activityForm(existing?: Row): void {
+  activityForm(existing?: Row, milestoneId?: number): void {
     const projectId = existing ? existing['project_id'] : this.project!['id'];
     void this.withOptions(async () => {
       const options = await this.options('catalogs/participants.php', { project_id: projectId });
+      const milestones: Row[] = this.project ? this.milestones
+        : (await this.api.request<Row>('milestones/list.php', { project_id: projectId }))['items'];
+      const hitoOptions = [{ value: 'none', label: 'Sin hito' }, ...milestones.map(m => ({ value: String(m['id']), label: `${m['description']} (meta ${this.date(m['target_date'])})` }))];
+      const currentHito = existing ? existing['milestone_id'] : milestoneId;
       this.openDialog({
         title: existing ? 'Editar actividad' : 'Nueva actividad', confirmLabel: existing ? 'Guardar' : 'Crear actividad',
-        values: existing ? { description: existing['description'], participant_id: String(existing['participant_id']), deadline: existing['deadline'] } : {},
+        values: {
+          ...(existing ? { description: existing['description'], participant_id: String(existing['participant_id']), deadline: existing['deadline'] } : {}),
+          milestone_id: currentHito ? String(currentHito) : 'none',
+        },
         fields: [
-          { key: 'description', label: 'Descripción', type: 'textarea', required: true },
+          { key: 'description', label: 'Descripción', type: 'textarea', required: true, placeholder: 'Ej.: Tomar muestras de agua en las 3 comunidades' },
           { key: 'participant_id', label: 'Responsable', type: 'select', required: true, options },
           { key: 'deadline', label: 'Fecha límite', type: 'date', required: true, min: existing ? undefined : this.todayIso },
+          { key: 'milestone_id', label: 'Hito al que pertenece', type: 'select', options: hitoOptions,
+            hint: 'El hito se marca como alcanzado solo, cuando todas sus actividades están completadas.' },
+          { key: 'file', label: existing ? 'Agregar material de apoyo (opcional)' : 'Material de apoyo (opcional)', type: 'file',
+            hint: 'Por ejemplo una guía o formato. PDF, Word, Excel, imagen o texto. Máximo 5 MB.' },
         ],
-        submit: async values => {
-          if (existing) await this.post('activities/update.php', { activity_id: existing['id'], ...values });
-          else await this.post('activities/create.php', { project_id: projectId, ...values });
+        submit: async (values, file) => {
+          const body: Row = { ...values, milestone_id: values['milestone_id'] === 'none' ? '' : values['milestone_id'], ...(await this.fileBody(file)) };
+          delete body['file'];
+          if (existing) await this.post('activities/update.php', { activity_id: existing['id'], ...body });
+          else await this.post('activities/create.php', { project_id: projectId, ...body });
           return existing ? 'Actividad actualizada.' : 'Actividad creada.';
         },
       });
     });
   }
+
+  /** Plan de trabajo: cada hito con sus actividades y al final las que no tienen hito. */
+  get activityGroups(): { milestone: Row | null; items: Row[] }[] {
+    const items = this.visibleActivities;
+    const groups: { milestone: Row | null; items: Row[] }[] = this.milestones.map(m => ({
+      milestone: m, items: items.filter(a => Number(a['milestone_id']) === Number(m['id'])) }));
+    const loose = items.filter(a => !a['milestone_id']);
+    if (loose.length || !groups.length) groups.push({ milestone: null, items: loose });
+    // Al buscar, se ocultan los hitos sin coincidencias.
+    return this.activityFilter.trim() ? groups.filter(g => g.items.length) : groups;
+  }
+  milestonePercent(m: Row): number { return Number(m['activity_count']) ? Math.round(100 * Number(m['completed_count']) / Number(m['activity_count'])) : 0; }
 
   submitActivity(): void {
     const a = this.activity!;
@@ -1097,17 +1141,13 @@ export class PlatformPage implements OnInit {
   // =====================================================================
   milestoneForm(existing?: Row): void {
     const p = this.project!;
-    const options = this.activities.filter(a => a['status'] !== 'cancelled').map(a => ({ value: String(a['id']), label: a['description'] }));
     this.openDialog({
       title: existing ? 'Editar hito' : 'Nuevo hito', confirmLabel: 'Guardar',
-      intro: 'El hito se marca como Alcanzado solo, cuando todas sus actividades estén completadas.',
-      values: existing ? { description: existing['description'], target_date: existing['target_date'],
-        activity_ids: (existing['activity_ids'] || []).map(String) } : {},
+      intro: 'Un hito agrupa actividades (por ejemplo "Trabajo de campo"). Las actividades se agregan desde el propio hito con «Actividad» o al crear/editar cada actividad.',
+      values: existing ? { description: existing['description'], target_date: existing['target_date'] } : {},
       fields: [
-        { key: 'description', label: 'Descripción', type: 'textarea', required: true },
-        { key: 'target_date', label: 'Fecha objetivo', type: 'date', required: true },
-        { key: 'activity_ids', label: 'Actividades del hito', type: 'checks', options,
-          hint: options.length ? 'Puedes vincularlas ahora o después.' : 'Todavía no hay actividades; puedes vincularlas después.' },
+        { key: 'description', label: 'Nombre del hito', type: 'text', required: true, placeholder: 'Ej.: Trabajo de campo' },
+        { key: 'target_date', label: 'Fecha meta', type: 'date', required: true },
       ],
       submit: async values => {
         const body = { project_id: p['id'], ...values };
@@ -1121,7 +1161,7 @@ export class PlatformPage implements OnInit {
   deleteMilestone(m: Row): void {
     this.openDialog({
       title: 'Eliminar hito', confirmLabel: 'Sí, eliminar', danger: true, values: {}, fields: [],
-      warning: `Se eliminará el hito «${m['description']}». Sus actividades no se borran.`,
+      warning: `Se eliminará el hito «${m['description']}». Sus actividades no se borran: quedan como «Sin hito».`,
       submit: async () => { await this.post('milestones/delete.php', { milestone_id: m['id'] }); return 'Hito eliminado.'; },
     });
   }
@@ -1275,24 +1315,7 @@ export class PlatformPage implements OnInit {
   // =====================================================================
   // Reporte imprimible
   // =====================================================================
-  showReport(data: Row): void {
-    const esc = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-    let html = '<!doctype html><html lang="es"><meta charset="utf-8"><title>Reporte de seguimiento</title><style>body{font:15px system-ui;margin:40px;color:#18253a}table{border-collapse:collapse;width:100%;margin-bottom:12px}td,th{border:1px solid #bbb;padding:8px;text-align:left}h2{margin-top:32px}@media print{button{display:none}}</style>' +
-      '<button onclick="window.print()">Imprimir / Guardar como PDF</button><h1>Reporte de seguimiento</h1><p>Generado por ' + esc(data['generated_by']) + ' · ' + esc(this.date(data['generated_at'])) + '</p>';
-    for (const p of data['projects'] || []) {
-      html += '<h2>' + esc(p.title) + '</h2><p>Responsable: ' + esc(p.researcher_name) + ' · Estado: ' + esc(this.status('project', p.status).label) + ' · Avance: ' + esc(p.progress) + ' %</p>';
-      html += '<h3>Equipo</h3><table>' + (p.participants || []).map((r: Row) => '<tr><td>' + esc(r['name']) + '</td><td>' + esc(r['project_role'] || this.roleName(r['role'])) + '</td><td>' + (Number(r['is_active']) ? 'Activo' : 'Retirado') + '</td></tr>').join('') + '</table>';
-      html += '<h3>Actividades</h3><table>' + (p.activities || []).map((r: Row) => '<tr><td>' + esc(r['description']) + '</td><td>' + esc(r['participant_name']) + '</td><td>' + esc(this.status('activity', r['status']).label) + '</td><td>' + esc(this.date(r['deadline'])) + '</td></tr>').join('') + '</table>';
-      html += '<h3>Hitos</h3><table>' + (p.milestones || []).map((r: Row) => '<tr><td>' + esc(r['description']) + '</td><td>' + esc(this.date(r['target_date'])) + '</td><td>' + esc(this.status('milestone', r['status']).label) + '</td></tr>').join('') + '</table>';
-    }
-    const url = URL.createObjectURL(new Blob([html + '</html>'], { type: 'text/html' }));
-    const opened = window.open(url, '_blank');
-    if (!opened) {
-      const link = document.createElement('a');
-      link.href = url; link.download = 'reporte-investigacion.html'; link.click();
-    }
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-  }
+
 
   // =====================================================================
   // Asistente

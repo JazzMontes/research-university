@@ -202,6 +202,7 @@ set search_path = research, extensions, pg_temp as $$
     'author_name', (select name from research.users where id = p.author_id),
     'author_role', (select role from research.users where id = p.author_id),
     'project_id', (select id from research.projects where proposal_id = p.id),
+    'project_status', (select status from research.projects where proposal_id = p.id),
     'file', (select jsonb_build_object('document_id', dd.id, 'filename', v.filename, 'size_bytes', v.size_bytes)
              from research.documents dd join research.document_versions v on v.document_id = dd.id
              where dd.proposal_id = p.id and dd.deleted_at is null order by v.id desc limit 1),
@@ -278,7 +279,7 @@ create or replace function research.ep_proposals(u research.users, act text, d j
 returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
 declare
-  p research.proposals; pid integer; researcher integer; v_status text; before_s text; after_s text;
+  p research.proposals; pj research.projects; pid integer; researcher integer; v_status text; before_s text; after_s text;
   obs text; decision text; new_project integer; v_limit integer; v_page integer; v_total integer;
   v_search text; v_filter text; log_action text;
 begin
@@ -390,11 +391,23 @@ begin
   elsif act = 'cancel' then
     -- Error humano típico: se envió una propuesta por equivocación o ya no se hará.
     if not (p.author_id = u.id or u.role = 'coordinator') then perform research.fail(403, 'Solo el autor o Coordinación pueden cancelar la propuesta.'); end if;
-    if before_s in ('approved', 'rejected', 'cancelled') then
-      perform research.fail(409, case before_s when 'approved' then 'La propuesta ya es un proyecto; cancela el proyecto si ya no se realizará.'
-        when 'cancelled' then 'La propuesta ya está cancelada.' else 'La propuesta ya fue rechazada.' end);
+    if before_s in ('rejected', 'cancelled') then
+      perform research.fail(409, case before_s when 'cancelled' then 'La propuesta ya está cancelada.' else 'La propuesta ya fue rechazada.' end);
     end if;
     obs := research.req_text(d, 'reason', 2000);
+    -- Una propuesta aprobada ya es un proyecto: cancelarla también cancela el proyecto (si no se completó).
+    if before_s = 'approved' then
+      select * into pj from research.projects where proposal_id = pid for update;
+      if pj.status = 'finalized' then
+        perform research.fail(409, 'El proyecto de esta propuesta ya se completó; no se puede cancelar.');
+      end if;
+      if pj.id is not null and pj.status <> 'cancelled' then
+        update research.closures set status = 'changes_requested', review_observations = 'Propuesta cancelada: ' || obs,
+          reviewed_by = u.id, reviewed_at = now() where project_id = pj.id and status = 'pending';
+        update research.projects set status = 'cancelled', status_note = 'Se canceló la propuesta: ' || obs, updated_at = now() where id = pj.id;
+        perform research.event_project(pj.id, u.id, 'project', pj.id, 'cancelled', jsonb_build_object('reason', 'Se canceló la propuesta: ' || obs));
+      end if;
+    end if;
     after_s := 'cancelled';
     update research.proposals set status_before_cancel = before_s where id = pid;
     log_action := 'cancelled';
@@ -405,6 +418,17 @@ begin
     if before_s <> 'cancelled' then perform research.fail(409, 'La propuesta no está cancelada.'); end if;
     after_s := coalesce(p.status_before_cancel, case when (select role from research.users where id = p.author_id) = 'student'
                                                        then 'pending_researcher_review' else 'pending_coordinator' end);
+    -- Si era un proyecto, se reabre (solo si se canceló junto con la propuesta).
+    if after_s = 'approved' then
+      select * into pj from research.projects where proposal_id = pid for update;
+      if pj.id is not null and pj.status = 'cancelled' then
+        if not exists (select 1 from research.users where id = pj.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
+          perform research.fail(409, 'El investigador responsable del proyecto ya no está activo. Pide a Coordinación que lo cambie antes de reactivar.');
+        end if;
+        update research.projects set status = 'active', status_note = null, updated_at = now() where id = pj.id;
+        perform research.event_project(pj.id, u.id, 'project', pj.id, 'reopened', jsonb_build_object('before', 'cancelled', 'reason', 'Se reactivó la propuesta.'));
+      end if;
+    end if;
     if after_s = 'pending_researcher_review' then perform research.active_role(p.responsible_researcher_id, 'researcher'); end if;
     update research.proposals set status_before_cancel = null where id = pid;
     obs := 'Reactivada.';
