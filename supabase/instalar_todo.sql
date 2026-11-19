@@ -1768,13 +1768,13 @@ set search_path = research, extensions, pg_temp as $$
     research.cut(p.description, 1500), research.cut(p.objectives, 1500),
     coalesce((select string_agg(x.name || ' (' || research.role_label(x.role) || coalesce(', ' || t.project_role, '') || ')', '; ' order by x.name)
               from research.participants t join research.users x on x.id = t.user_id where t.project_id = p.id and t.is_active = 1), 'sin integrantes'),
-    coalesce((select string_agg(format('- [A%s] %s — responsable: %s%s — estado: %s — fecha límite: %s (%s)',
-                a.id, research.cut(a.description, 300), x.name, case when a.participant_id = me then ' (tú)' else '' end,
+    coalesce((select string_agg(format('- Actividad «%s» — responsable: %s%s — estado: %s — fecha límite: %s (%s)',
+                research.cut(a.description, 300), x.name, case when a.participant_id = me then ' (tú)' else '' end,
                 research.status_label(a.status), research.fmt_date(a.deadline), research.deadline_status(a.status, a.deadline)), E'\n' order by a.deadline)
               from (select * from research.activities where project_id = p.id order by deadline limit 40) a
               join research.users x on x.id = a.participant_id), '- (sin actividades registradas)'),
-    coalesce((select string_agg(format('- [H%s] %s — fecha objetivo: %s — estado: %s — actividades completadas: %s de %s',
-                m.id, research.cut(m.description, 300), research.fmt_date(m.target_date), research.status_label(research.milestone_status(m.id)),
+    coalesce((select string_agg(format('- Hito «%s» — fecha objetivo: %s — estado: %s — actividades completadas: %s de %s',
+                research.cut(m.description, 300), research.fmt_date(m.target_date), research.status_label(research.milestone_status(m.id)),
                 (select count(*) from research.milestone_activities ma join research.activities a on a.id = ma.activity_id where ma.milestone_id = m.id and a.status = 'completed'),
                 (select count(*) from research.milestone_activities ma where ma.milestone_id = m.id)), E'\n' order by m.target_date)
               from (select * from research.milestones where project_id = p.id order by target_date limit 20) m), '- (sin hitos registrados)'),
@@ -1819,8 +1819,8 @@ begin
   end loop;
 
   -- Propuestas visibles (estado del flujo de aprobación).
-  select coalesce(string_agg(format('- [Propuesta %s] %s — estado: %s%s — autor: %s — investigador responsable: %s%s',
-      x.id, x.title, research.status_label(x.status), '',
+  select coalesce(string_agg(format('- Propuesta «%s» — estado: %s%s — autor: %s — investigador responsable: %s%s',
+      x.title, research.status_label(x.status), '',
       au.name, rr.name,
       coalesce(' — última observación: ' || research.cut((select h.details from research.proposal_history h where h.proposal_id = x.id
           and h.details is not null and (h.action like 'review_%' or h.action = 'cancelled') order by h.id desc limit 1), 400), '')), E'\n' order by x.id desc), '')

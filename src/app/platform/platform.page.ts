@@ -1053,6 +1053,7 @@ export class PlatformPage implements OnInit {
         if (line.toLocaleLowerCase().replace(all.toLocaleLowerCase(), '').includes(info.label.toLocaleLowerCase())) return '';
         return `\u0000${info.kind}\u0001${info.label}\u0002`;
       }).filter(Boolean).join(' '))
+      .replace(/[\[(](?:propuesta|actividad|hito|proyecto|documento|fragmento)\s*#?\s*\d+[\])]/gi, '')
       .replace(/\s+([.,;:])/g, '$1').replace(/ {2,}/g, ' ').replace(/\s+(y|o)\s*([.,;:]|$)/g, '$2');
     const inline = (v: string) => esc(tag(v))
       .replace(/`([^`]+)`/g, '<code>$1</code>')
