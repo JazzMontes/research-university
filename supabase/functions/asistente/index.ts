@@ -29,7 +29,7 @@ type Json = Record<string, any>;
 const PROVIDERS: Record<string, { url: string; models: string[] }> = {
   gemini: {
     url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    models: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest"],
+    models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-flash-latest"],
   },
   // Si un modelo no está disponible en tu cuenta se prueba el siguiente. Para fijar uno usa AI_MODEL.
   openai: { url: "https://api.openai.com/v1/chat/completions", models: ["gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"] },
@@ -108,10 +108,10 @@ function buildMessages(ctx: Json, history: Json[]): Json[] {
   const general = generalAllowed();
   const system = [
     "Eres el asistente de IA de URPMP, una plataforma universitaria de gestión de proyectos de investigación. Ayudas a estudiantes, investigadores y Coordinación.",
-    "Respondes SIEMPRE en español, claro y al grano. Usa viñetas o pasos cuando ayuden.",
+    "Respondes SIEMPRE en español, claro y al grano: respuestas CORTAS (unas 120 palabras como máximo) salvo que el usuario pida más detalle o un resumen largo. Usa viñetas o pasos cuando ayuden.",
     "",
     "DE DÓNDE SALE CADA RESPUESTA:",
-    "1) Datos del usuario y de sus proyectos, propuestas, actividades, hitos, equipo y documentos: usa SOLO el CONTEXTO AUTORIZADO (ya viene filtrado por sus permisos). Escribe SIEMPRE en el texto el NOMBRE del proyecto, actividad, hito o documento del que hablas (por ejemplo: «En tu proyecto Agua potable, la actividad Muestreo vence el 3 de diciembre»); nunca digas solo "P3" o "el fragmento 6". Al final de esa frase agrega la referencia: [1], [2]… para fragmentos de documentos y [P12] para datos del proyecto 12 (sus actividades e hitos también se citan con el [P#] de su proyecto); la app la convierte en una etiqueta con el nombre. Si ese dato no aparece en el contexto, dilo: NUNCA inventes nombres, fechas, calificaciones, avances ni contenido de documentos.",
+    "1) Datos del usuario y de sus proyectos, propuestas, actividades, hitos, equipo y documentos: usa SOLO el CONTEXTO AUTORIZADO (ya viene filtrado por sus permisos). Escribe SIEMPRE en el texto el NOMBRE del proyecto, actividad, hito o documento del que hablas (por ejemplo: «En tu proyecto Agua potable, la actividad Muestreo vence el 3 de diciembre»); nunca digas solo «P3» o «el fragmento 6». Al final de esa frase agrega la referencia: [1], [2]… para fragmentos de documentos y [P12] para datos del proyecto 12 (sus actividades e hitos también se citan con el [P#] de su proyecto); la app la convierte en una etiqueta con el nombre. Si ese dato no aparece en el contexto, dilo: NUNCA inventes nombres, fechas, calificaciones, avances ni contenido de documentos.",
     "2) Cómo usar la plataforma (dónde está un botón, cómo cancelar, cómo retirar a alguien, etc.): usa la GUÍA DE LA PLATAFORMA. Si el usuario no tiene permiso para algo, dile quién puede hacerlo.",
     general
       ? "3) Dudas generales (metodología de investigación, cómo redactar objetivos o un marco teórico, normas APA, estadística, conceptos de su tema, programación, organización del trabajo, etc.): respóndelas con tu conocimiento general aunque no estén en los documentos. Al final agrega una línea: «Nota: esta parte es conocimiento general, no viene de los documentos de la plataforma.» Si la duda depende de reglas de la universidad y no hay una fuente institucional en el contexto, responde en general y aclara que deben confirmarlo con Coordinación o el reglamento."
@@ -192,19 +192,19 @@ async function callGemini(key: string, messages: Json[], onDelta: OnDelta): Prom
     contents,
     generationConfig: {
       temperature: 0.3,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 1200,
       ...(withThinking && Object.keys(thinkingFor(model)).length ? { thinkingConfig: thinkingFor(model) } : {}),
     },
   });
   const started = Date.now();
   let lastError = "";
   for (const model of models) {
-    if (Date.now() - started > 30000) break;
+    if (Date.now() - started > 22000) break;
     let withThinking = true;
     for (let attempt = 0; attempt < 3; attempt++) {
       // Si Gemini no manda la primera palabra en 12 s, se corta y se prueba otro modelo.
       const abort = new AbortController();
-      let timer = setTimeout(() => abort.abort(), 12000);
+      let timer = setTimeout(() => abort.abort(), 7000); // primera palabra en ≤ 7 s o se usa otro modelo
       let res: Response;
       try {
         res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
@@ -337,13 +337,22 @@ function streamReply(apikey: string, datos: Json, token: string, history: Json[]
       };
       let wrote = false;
       try {
+        const t0 = Date.now();
         const ctx = await researchApi(apikey, "assistant/context.php", datos, token);
+        const contextMs = Date.now() - t0;
         if (ctx.status !== 200) { send({ type: "error", status: ctx.status, message: ctx.body?.message }); return; }
         const key = (Deno.env.get("AI_API_KEY") || Deno.env.get("OPENAI_API_KEY") || Deno.env.get("GEMINI_API_KEY") || "").trim();
         if (!key) { await local("La IA no está configurada (falta el secreto AI_API_KEY). Respuesta generada con los datos del sistema."); return; }
         try {
-          const { answer, model } = await callModel(buildMessages(ctx.body, history), (text) => { wrote = true; send({ type: "delta", text }); });
-          send({ type: "done", sources: citedSources(answer, ctx.body.sources || []), model });
+          let firstMs = 0;
+          const { answer, model } = await callModel(buildMessages(ctx.body, history), (text) => {
+            if (!wrote) firstMs = Date.now() - t0;
+            wrote = true;
+            send({ type: "delta", text });
+          });
+          const timing = { context_ms: contextMs, first_word_ms: firstMs, total_ms: Date.now() - t0 };
+          console.log("asistente tiempos", model, JSON.stringify(timing));
+          send({ type: "done", sources: citedSources(answer, ctx.body.sources || []), model, timing });
         } catch (error) {
           if (wrote) send({ type: "done", sources: [], notice: "La respuesta se cortó antes de terminar." });
           else await local(`No se pudo usar la IA (${(error as Error).message}). Respuesta generada con los datos del sistema.`);
@@ -372,6 +381,8 @@ Deno.serve(async (req: Request) => {
   const datos: Json = { question: input.question, mode: input.mode || "ask" };
   if (input.project_id) datos.project_id = input.project_id;
 
+  // La app "despierta" la función al abrir el asistente, para que la primera pregunta no espere el arranque.
+  if (input.ping === true) return reply(200, { ok: true });
   if (input.stream === true) return streamReply(apikey, datos, token, Array.isArray(input.history) ? input.history : []);
 
   try {

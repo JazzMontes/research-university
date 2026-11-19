@@ -247,6 +247,10 @@ export class PlatformPage implements OnInit {
           if (fresh()) this.users = result['items'];
           break;
         }
+        case 'assistant':
+          // Despierta la función de IA mientras la persona escribe su pregunta.
+          void this.backend.callFunction('asistente', { ping: true }, 15000);
+          break;
         case 'institutional': {
           const result = await this.api.request<Row>('institutional-documents/list.php');
           if (fresh()) this.sources = result['items'];
@@ -1039,13 +1043,17 @@ export class PlatformPage implements OnInit {
       refs.set(String(src['reference']), { label: String(src['title'] || ''), kind: src['type'] === 'project' ? 'project' : 'document' });
     }
     const esc = (v: string) => v.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-    const tag = (line: string) => line.replace(/\[(P?\d+)\]/g, (all, ref: string) => {
-      const info = refs.get(ref);
-      if (!info) return ref.startsWith('P') ? '' : all;
-      // Si la frase ya dice el nombre, no se repite.
-      if (line.toLocaleLowerCase().replace(all.toLocaleLowerCase(), '').includes(info.label.toLocaleLowerCase())) return '';
-      return `\u0000${info.kind}\u0001${info.label}\u0002`;
-    });
+    // Nunca se muestran los ID: [P3], [P1, P2], (P3), [6], [A12]… se cambian por el nombre o se quitan.
+    // Entre paréntesis solo se tocan los que llevan letra, para no borrar cosas como "(2026)".
+    const tag = (line: string) => line.replace(/\[((?:[PAH]?\d+)(?:\s*[,;]\s*[PAH]?\d+)*)\]|\(((?:[PAH]\d+)(?:\s*[,;]\s*[PAH]\d+)*)\)/g,
+      (all, inBrackets: string, inParens: string) => (inBrackets || inParens).split(/\s*[,;]\s*/).map(ref => {
+        const info = refs.get(ref);
+        if (!info) return '';
+        // Si la frase ya dice el nombre, no se repite.
+        if (line.toLocaleLowerCase().replace(all.toLocaleLowerCase(), '').includes(info.label.toLocaleLowerCase())) return '';
+        return `\u0000${info.kind}\u0001${info.label}\u0002`;
+      }).filter(Boolean).join(' '))
+      .replace(/\s+([.,;:])/g, '$1').replace(/ {2,}/g, ' ').replace(/\s+(y|o)\s*([.,;:]|$)/g, '$2');
     const inline = (v: string) => esc(tag(v))
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -1053,7 +1061,7 @@ export class PlatformPage implements OnInit {
       .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
       .replace(/(^|[^_\w])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>')
       .replace(/\u0000(\w+)\u0001([^\u0002]*)\u0002/g, (_m, kind: string, label: string) =>
-        `<span class="ref ref-${kind}">${kind === 'project' ? 'Proyecto' : 'Documento'}: ${label}</span>`)
+        `<span class="ref ref-${kind}" title="${kind === 'project' ? 'Proyecto' : 'Documento'}">${label}</span>`)
       .replace(/ +([.,;:])/g, '$1');
     const out: string[] = [];
     let list: 'ul' | 'ol' | null = null;
@@ -1100,7 +1108,10 @@ export class PlatformPage implements OnInit {
       const connected = await this.backend.streamFunction('asistente', { question, mode: this.assistantMode, history, stream: true }, event => {
         if (event.type === 'delta') { received = true; reply.text += event.text; reply.html = this.rich(reply.text); }
         else if (event.type === 'final') { received = true; reply.text = event.answer || ''; sources = event.sources || []; notice = event.notice || ''; }
-        else if (event.type === 'done') { sources = event.sources || []; notice = event.notice || ''; }
+        else if (event.type === 'done') {
+          sources = event.sources || []; notice = event.notice || '';
+          if (event.timing) console.info('Asistente', event.model, event.timing);
+        }
         else if (event.type === 'error') failure = event;
         this.changeDetector.markForCheck();
       });
