@@ -169,7 +169,16 @@ td:first-child { font-weight: 600; }
 .assistant-symbol { font-size: 37px; color: #2a7568; }
 .message { background: #edf5f0; border-radius: 10px; padding: 16px; max-width: 80%; margin: 16px 0; font-size: 14px; }
 .message.mine { margin-left: auto; background: #dcefe8; }
-.message p { white-space: pre-wrap; }
+.message > p { white-space: pre-wrap; }
+/* Respuesta del asistente con formato (negritas, listas, citas). */
+.md { margin-top: 6px; line-height: 1.6; }
+.md p { margin: 6px 0; }
+.md ul, .md ol { margin: 6px 0 10px; padding-left: 22px; }
+.md li { margin: 4px 0; }
+.md h4 { font-size: 15px; margin: 12px 0 4px; }
+.md blockquote { margin: 8px 0; padding: 8px 12px; border-left: 4px solid #7fb5a6; background: #ffffff99; border-radius: 0 6px 6px 0; }
+.md code { background: #ffffffaa; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.md em { color: #3f5a53; }
 .chat-form { display: flex; gap: 10px; margin-top: 26px; }
 .chat-form select { width: 130px; }
 .chat-form input { flex: 1; }

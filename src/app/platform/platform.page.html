@@ -429,7 +429,11 @@
               <div class="assistant-intro"><span class="assistant-symbol">◈</span><h2>¿En qué puedo ayudarte?</h2>
                 <p>Prueba: «¿Qué actividades tengo pendientes?», «Resume el último informe» o «¿Qué dice el reglamento sobre el cierre?».</p></div>
             }
-            @for (m of messages; track $index) { <article class="message" [class.mine]="m.author === 'Tú'"><strong>{{ m.author }}</strong><p>{{ m.text }}</p></article> }
+            @for (m of messages; track $index) {
+              <article class="message" [class.mine]="m.author === 'Tú'"><strong>{{ m.author }}</strong>
+                @if (m.html) { <div class="md" [innerHTML]="m.html"></div> } @else { <p>{{ m.text }}</p> }
+              </article>
+            }
             @if (asking) { <p class="muted" role="status">Consultando…</p> }
             <form class="chat-form" (ngSubmit)="ask()">
               <select name="mode" aria-label="Tipo de consulta" [(ngModel)]="assistantMode">

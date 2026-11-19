@@ -29,7 +29,7 @@ type Json = Record<string, any>;
 const PROVIDERS: Record<string, { url: string; models: string[] }> = {
   gemini: {
     url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    models: ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"],
+    models: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest"],
   },
   // Si un modelo no está disponible en tu cuenta se prueba el siguiente. Para fijar uno usa AI_MODEL.
   openai: { url: "https://api.openai.com/v1/chat/completions", models: ["gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"] },
@@ -170,49 +170,62 @@ function requestBody(provider: string, model: string, messages: Json[]): Json {
 // en la ruta compatible con OpenAI. También funciona con las claves "AIza".
 async function callGemini(key: string, messages: Json[]): Promise<{ answer: string; model: string }> {
   const custom = (Deno.env.get("AI_MODEL") || "").trim();
-  const models = custom ? [custom] : PROVIDERS.gemini.models;
+  // AI_MODEL va primero; si falla, se prueban los demás.
+  const models = custom ? [custom, ...PROVIDERS.gemini.models.filter((m) => m !== custom)] : PROVIDERS.gemini.models;
   const system = messages.filter((m) => m.role === "system").map((m) => String(m.content)).join("\n\n");
   const contents = messages.filter((m) => m.role !== "system")
     .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: String(m.content) }] }));
   let lastError = "";
+  const body = (model: string) => JSON.stringify({
+    systemInstruction: { parts: [{ text: system }] },
+    contents,
+    generationConfig: {
+      temperature: 0.3,
+      maxOutputTokens: 2048,
+      // Velocidad: Gemini 2.5 Flash "piensa" antes de responder y eso tarda; para este asistente no hace falta.
+      ...(/2\.5-flash/.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+    },
+  });
+  const started = Date.now();
   for (const model of models) {
-    let res: Response;
-    try {
-      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents,
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 8192,
-            // Gemini 2.5 "piensa" antes de responder: con un presupuesto bajo responde rápido y sin quedarse corto.
-            ...(model.includes("2.5") ? { thinkingConfig: { thinkingBudget: 1024 } } : {}),
-          },
-        }),
-        signal: AbortSignal.timeout(45000),
-      });
-    } catch (error) {
-      const timedOut = (error as Error)?.name === "TimeoutError";
-      throw new Error(timedOut ? "el servicio de IA tardó demasiado en responder" : "no hubo conexión con el servicio de IA");
+    if (Date.now() - started > 35000) break; // la app espera ~60 s en total
+    // Google responde 503 cuando el modelo está saturado: se reintenta y, si sigue igual, se usa el siguiente modelo.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 700));
+      let res: Response;
+      try {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+          body: body(model),
+          signal: AbortSignal.timeout(25000),
+        });
+      } catch (error) {
+        lastError = (error as Error)?.name === "TimeoutError" ? "Gemini tardó demasiado en responder" : "no hubo conexión con Gemini";
+        break;
+      }
+      const text = await res.text();
+      if (res.ok) {
+        console.log("IA gemini", model, `${Date.now() - started} ms`);
+        const data = JSON.parse(text);
+        const parts = (data?.candidates?.[0]?.content?.parts || []) as Json[];
+        const answer = parts.filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("").trim();
+        if (answer) return { answer, model };
+        lastError = data?.promptFeedback?.blockReason ? "Gemini bloqueó la pregunta por sus filtros de seguridad" : "Gemini devolvió una respuesta vacía";
+        break;
+      }
+      console.error("IA gemini", model, res.status, text.slice(0, 500));
+      let detail = "";
+      try { detail = String(JSON.parse(text)?.error?.message || "").slice(0, 160); } catch { /* sin detalle */ }
+      if (res.status === 401 || res.status === 403) {
+        throw new Error("la clave AI_API_KEY de Gemini no es válida o no tiene permiso" + (detail ? `: ${detail}` : ""));
+      }
+      lastError = `Gemini (${model}) respondió ${res.status}` + (detail ? `: ${detail}` : "");
+      if (res.status >= 500) continue;           // saturado o caído: reintentar
+      break;                                      // 400/404/429: probar el siguiente modelo
     }
-    const text = await res.text();
-    if (res.ok) {
-      const data = JSON.parse(text);
-      const parts = (data?.candidates?.[0]?.content?.parts || []) as Json[];
-      const answer = parts.filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("").trim();
-      if (answer) return { answer, model };
-      lastError = data?.promptFeedback?.blockReason ? "Gemini bloqueó la pregunta por sus filtros de seguridad" : "el modelo devolvió una respuesta vacía";
-      continue;
-    }
-    console.error("IA gemini", model, res.status, text.slice(0, 500));
-    if (res.status === 401 || res.status === 403) throw new Error("la clave AI_API_KEY de Gemini no es válida o no tiene permiso para la API de Gemini");
-    if (res.status === 429) throw new Error("se alcanzó el límite gratuito de Gemini; espera un minuto o intenta más tarde");
-    lastError = `el servicio respondió ${res.status}`;
-    if (res.status !== 404 && res.status !== 400) break; // 404/400: probar el siguiente modelo
   }
-  throw new Error(lastError || "no se pudo usar el modelo");
+  throw new Error(lastError || "no se pudo usar Gemini");
 }
 
 async function callModel(messages: Json[]): Promise<{ answer: string; model: string }> {

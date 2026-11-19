@@ -106,7 +106,7 @@ export class PlatformPage implements OnInit {
 
   question = '';
   assistantMode = 'ask';
-  messages: { author: string; text: string }[] = [];
+  messages: { author: string; text: string; html?: string }[] = [];
   asking = false;
 
   // ---------- diálogo único ----------
@@ -1028,6 +1028,43 @@ export class PlatformPage implements OnInit {
   // =====================================================================
   // Asistente
   // =====================================================================
+  /**
+   * Convierte el formato que usa la IA (Markdown: **negritas**, *cursivas*, viñetas, listas numeradas,
+   * citas con >, títulos con #) en HTML. Primero se escapa todo el texto, así no se puede inyectar HTML.
+   */
+  rich(markdown: string): string {
+    const esc = (v: string) => v.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+    const inline = (v: string) => esc(v)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/__(.+?)__/g, '<strong>$1</strong>')
+      .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, '$1<em>$2</em>')
+      .replace(/(^|[^_\w])_(?!\s)(.+?)_(?!\w)/g, '$1<em>$2</em>');
+    const out: string[] = [];
+    let list: 'ul' | 'ol' | null = null;
+    const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    for (const raw of markdown.replace(/\r/g, '').split('\n')) {
+      const line = raw.trimEnd();
+      const bullet = line.match(/^\s*[*\-•]\s+(.*)$/);
+      const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+      if (bullet || numbered) {
+        const kind = bullet ? 'ul' : 'ol';
+        if (list !== kind) { closeList(); out.push(`<${kind}>`); list = kind; }
+        out.push(`<li>${inline((bullet || numbered)![1])}</li>`);
+        continue;
+      }
+      closeList();
+      if (!line.trim()) continue;
+      const heading = line.match(/^#{1,6}\s+(.*)$/);
+      const quote = line.match(/^>\s?(.*)$/);
+      if (heading) out.push(`<h4>${inline(heading[1])}</h4>`);
+      else if (quote) out.push(`<blockquote>${inline(quote[1])}</blockquote>`);
+      else out.push(`<p>${inline(line)}</p>`);
+    }
+    closeList();
+    return out.join('');
+  }
+
   async ask(): Promise<void> {
     if (!this.question.trim() || this.asking) return;
     const question = this.question.trim();
@@ -1048,9 +1085,10 @@ export class PlatformPage implements OnInit {
       else if (ai && ai.status !== 404 && ai.status < 500) throw new Error(ai.body?.['message'] || 'No se pudo consultar.');
       else r = await this.api.request<Row>('assistant/query.php', {}, { question, mode: this.assistantMode });
       const sources = (r['sources'] || []) as Row[];
-      this.messages.push({ author: 'Asistente', text: r['answer'] + (sources.length ? '\n\nFuentes:\n' +
-        sources.map(s => `[${s['reference']}] ${s['title']}${s['version'] ? ' · v' + s['version'] : ''}`).join('\n') : '') +
-        (r['notice'] ? '\n\n(' + r['notice'] + ')' : '') });
+      const text = r['answer'] + (sources.length ? '\n\n**Fuentes:**\n' +
+        sources.map(s => `- [${s['reference']}] ${s['title']}${s['version'] ? ' · v' + s['version'] : ''}`).join('\n') : '') +
+        (r['notice'] ? '\n\n_(' + r['notice'] + ')_' : '');
+      this.messages.push({ author: 'Asistente', text, html: this.rich(text) });
     } catch (error) {
       this.messages.push({ author: 'Asistente', text: this.message(error, 'No se pudo consultar.') });
     } finally {
