@@ -139,6 +139,10 @@ Pendiente → Entregar → En revisión → Aceptar (**Completada**) o Pedir cam
 - **Cambio de investigador**: mientras sea propuesta, el estudiante lo cambia directamente. En un proyecto, quien pide el cambio **elige al nuevo investigador**; Coordinación ve «X quiere cambiar a A por B» y solo aprueba o rechaza.
 - **Solicitudes que ya no aplican se cierran solas** (proyecto o propuesta cancelada, responsable ya cambiado, etc.); ya no aparecen en Inicio ni dejan llenar datos en balde.
 - **Permisos para integrantes**: en Equipo, el investigador responsable puede **Dar permisos** a un estudiante para crear, editar y revisar actividades e hitos (nadie revisa su propia entrega).
+- Las ventanas de cancelar o eliminar ya no se ven amontonadas: título, aviso, motivo y botones quedan en orden.
+- **Fechas de actividades**: la fecha límite no puede ser anterior al día en que se creó la actividad (al crearla: hoy), ni en la app ni en el servidor. La fecha meta de un hito no puede ser antes del inicio del proyecto.
+- **Mover actividades a un hito**: en el Plan de trabajo se arrastra una actividad sobre un hito (o a «Sin hito»). Desde cada hito también está **Agregar sin hito**, para elegir una o varias actividades que no tienen hito.
+- **Fechas del proyecto**: inicia el día en que se aprobó la propuesta (ya no se edita; los proyectos existentes se ajustan solos). El **término estimado** es opcional y se puede cambiar; el **término real** se marca solo al completarse o cancelarse el proyecto (y se borra si se reabre).
 - Los buscadores ya no dicen «(se actualiza mientras escribes)».
 - Corrección: la recuperación de contraseña ahora sí muestra en pantalla «No hay ninguna cuenta registrada con ese correo» (y los demás avisos de error).
 - Requiere ejecutar `supabase/instalar_todo.sql` y publicar de nuevo la función `asistente`.

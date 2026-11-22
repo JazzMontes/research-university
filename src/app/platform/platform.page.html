@@ -188,7 +188,7 @@
                   <div class="list-row">
                     <div><strong>{{ r.target_title }}</strong>
                       <small><span [innerHTML]="fmt(changeRequestText(r))"></span> Motivo: {{ r.reason }}</small></div>
-                    <div class="row-actions"><a class="text-button" [routerLink]="['/app', r.link]"><app-icon name="next"></app-icon>Ver</a>
+                    <div class="row-actions"><a class="text-button" [routerLink]="linkParts(r.link)"><app-icon name="next"></app-icon>Ver</a>
                       <button type="button" class="secondary small" (click)="reviewChangeRequest(r)"><app-icon name="review"></app-icon>Resolver</button></div>
                   </div>
                 }
@@ -440,8 +440,12 @@
           @if (tab === 'Resumen') {
             <section class="panel">
               <dl class="details">
-                <div><dt>Inicio</dt><dd>{{ date(project['start_date']) }}</dd></div>
-                <div><dt>Término</dt><dd>{{ date(project['end_date']) }}</dd></div>
+                <div><dt>Inicio</dt><dd>{{ date(project['start_date']) }}<small class="dd-note">Aprobación de la propuesta</small></dd></div>
+                @if (project['finished_on']) {
+                  <div><dt>Término</dt><dd>{{ date(project['finished_on']) }}<small class="dd-note">{{ project['status'] === 'cancelled' ? 'Cancelado' : 'Completado' }}@if (project['end_date']) { · estimado {{ date(project['end_date']) }} }</small></dd></div>
+                } @else {
+                  <div><dt>Término estimado</dt><dd>{{ project['end_date'] ? date(project['end_date']) : 'Sin definir' }}<small class="dd-note">Se marca al completarse</small></dd></div>
+                }
                 <div><dt>Actividades</dt><dd>{{ project['completed_activities'] }} de {{ project['total_activities'] }} completadas
                   @if (+project['overdue_activities']) { · <span class="late">{{ project['overdue_activities'] }} retrasada(s)</span> }</dd></div>
                 <div><dt>Hitos</dt><dd>{{ project['achieved_milestones'] }} de {{ project['total_milestones'] }} alcanzados</dd></div>
@@ -502,10 +506,15 @@
                   </div>
                 }
               </div>
-              <p class="muted plan-help">Organiza las actividades en hitos (etapas). Cada hito se marca como alcanzado solo cuando todas sus actividades están completadas.</p>
+              <p class="muted plan-help">Organiza las actividades en hitos (etapas). Cada hito se marca como alcanzado solo cuando todas sus actividades están completadas.
+                @if (canManagePlan && projectEditable && milestones.length) { <br><app-icon name="swap" [size]="13"></app-icon> Arrastra una actividad sobre un hito para moverla. }</p>
               @if (activities.length > 3) { <input class="tab-search" type="search" aria-label="Buscar actividad" [(ngModel)]="activityFilter" placeholder="Buscar actividad o responsable…"> }
               @for (g of activityGroups; track g.milestone?.id ?? 'none') {
-                <div class="milestone-group" [class.loose]="!g.milestone">
+                <div class="milestone-group" [class.loose]="!g.milestone" [class.drop-here]="dropTarget === (g.milestone ? 'm' + g.milestone.id : 'none')"
+                  [class.dragging]="!!dragActivity"
+                  (dragover)="onDragOver(g.milestone ? 'm' + g.milestone.id : 'none', $event)"
+                  (dragleave)="onDragLeave(g.milestone ? 'm' + g.milestone.id : 'none', $event)"
+                  (drop)="onDrop(g.milestone, $event)">
                   <header class="milestone-head">
                     @if (g.milestone) {
                       <span class="milestone-flag" [class]="'milestone-flag tone-' + status('milestone', g.milestone.status).tone"><app-icon [name]="g.milestone.status === 'achieved' ? 'flag-done' : 'flag'"></app-icon></span>
@@ -517,7 +526,8 @@
                       <span class="badge" [class]="'badge tone-' + status('milestone', g.milestone.status).tone">{{ status('milestone', g.milestone.status).label }}</span>
                       @if (canManagePlan && projectEditable) {
                         <div class="row-actions">
-                          <button type="button" class="text-button" (click)="activityForm(undefined, +g.milestone.id)"><app-icon name="plus"></app-icon>Actividad</button>
+                          <button type="button" class="text-button" (click)="activityForm(undefined, +g.milestone.id)"><app-icon name="plus"></app-icon>Nueva actividad</button>
+                          @if (looseActivities.length) { <button type="button" class="text-button" (click)="addExistingToMilestone(g.milestone)"><app-icon name="tasks"></app-icon>Agregar sin hito ({{ looseActivities.length }})</button> }
                           <button type="button" class="text-button" (click)="milestoneForm(g.milestone)"><app-icon name="edit"></app-icon>Editar</button>
                           <button type="button" class="text-button danger-text" (click)="deleteMilestone(g.milestone)"><app-icon name="trash"></app-icon>Eliminar</button>
                         </div>
@@ -528,7 +538,11 @@
                     }
                   </header>
                   @for (a of g.items; track a.id) {
-                    <a class="list-row" [class.muted-row]="a.status === 'cancelled'" [routerLink]="['/app/activities', a.id]">
+                    <a class="list-row" [class.muted-row]="a.status === 'cancelled'" [routerLink]="['/app/activities', a.id]"
+                      [attr.draggable]="canManagePlan && projectEditable && a.status !== 'cancelled' ? 'true' : null"
+                      [class.draggable]="canManagePlan && projectEditable && a.status !== 'cancelled'" [class.is-dragging]="dragActivity === +a.id"
+                      (dragstart)="onDragStart(a, $event)" (dragend)="onDragEnd()">
+                      @if (canManagePlan && projectEditable && a.status !== 'cancelled') { <span class="drag-handle" aria-hidden="true">⋮⋮</span> }
                       <div><strong>{{ a.description }}</strong><small><app-icon name="user" [size]="13"></app-icon> {{ a.participant_name }} · vence {{ date(a.deadline) }}
                         @if (+a.evidence_count) { · <app-icon name="clip" [size]="13"></app-icon>{{ a.evidence_count }} evidencia(s) }
                         @if (a.materials?.length) { · <app-icon name="file" [size]="13"></app-icon>material }</small></div>
@@ -538,7 +552,7 @@
                       <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
                     </a>
                   } @empty {
-                    <p class="muted empty-group">{{ g.milestone ? 'Este hito todavía no tiene actividades.' : 'Todavía no hay actividades.' }}</p>
+                    <p class="muted empty-group">{{ g.milestone ? (dragActivity ? 'Suelta aquí la actividad.' : 'Este hito todavía no tiene actividades.') : (dragActivity ? 'Suelta aquí para dejarla sin hito.' : 'Todavía no hay actividades.') }}</p>
                   }
                 </div>
               }
@@ -850,7 +864,7 @@
   }
   @if (dialog && auth.user()) {
     <div class="modal-backdrop">
-      <section class="modal" [class.danger]="dialog.danger" role="dialog" aria-modal="true" aria-labelledby="modal-title" (keydown.escape)="closeDialog()">
+      <section class="modal" [class.is-danger]="dialog.danger" role="dialog" aria-modal="true" aria-labelledby="modal-title" (keydown.escape)="closeDialog()">
         <header><h2 id="modal-title"><app-icon [name]="dialog.danger ? 'alert' : 'edit'" [size]="22"></app-icon><span [innerHTML]="fmt(dialog.title)"></span></h2><button type="button" (click)="closeDialog()" [disabled]="saving" aria-label="Cerrar">×</button></header>
         @if (dialog.intro) { <p class="intro" [innerHTML]="fmt(dialog.intro)"></p> }
         @if (dialog.warning) { <p class="warning" role="note"><app-icon name="alert" [size]="20"></app-icon><span [innerHTML]="fmt(dialog.warning)"></span></p> }

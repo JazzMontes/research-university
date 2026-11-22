@@ -100,6 +100,16 @@ create table if not exists research.projects (
 -- Columnas agregadas en la versión 2 (por si la base ya existía).
 alter table research.projects add column if not exists description text;
 alter table research.projects add column if not exists objectives text;
+-- Fechas del proyecto: inicia el día en que se aprobó la propuesta; end_date es el término ESTIMADO
+-- y finished_on el término REAL (se marca al completarse o cancelarse; se borra si se reabre).
+alter table research.projects add column if not exists finished_on date;
+update research.projects set start_date = (created_at at time zone 'America/Mexico_City')::date
+  where start_date is distinct from (created_at at time zone 'America/Mexico_City')::date;
+update research.projects p set finished_on = coalesce(
+    (select (max(c.reviewed_at) at time zone 'America/Mexico_City')::date from research.closures c where c.project_id = p.id and c.status = 'approved'),
+    (p.updated_at at time zone 'America/Mexico_City')::date)
+  where p.status in ('finalized', 'cancelled') and p.finished_on is null;
+update research.projects set end_date = null where end_date is not null and end_date < start_date;
 alter table research.projects add column if not exists start_date date;
 alter table research.projects add column if not exists end_date date;
 alter table research.projects add column if not exists status_note text;

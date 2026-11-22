@@ -776,7 +776,9 @@ export class PlatformPage implements OnInit {
         this.dialogError = 'La contraseña necesita de 8 a 72 caracteres, con mayúscula, minúscula y número.'; return;
       }
       if (field.type === 'email' && value && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) { this.dialogError = 'Revisa el correo.'; return; }
-      if (field.type === 'date' && value && field.min && value < field.min) { this.dialogError = `${field.label}: la fecha ya pasó.`; return; }
+      if (field.type === 'date' && value && field.min && value < field.min) {
+        this.dialogError = `${field.label}: no puede ser antes del ${this.date(field.min)}.`; return;
+      }
     }
     if (this.dialogFile && this.dialogFile.size > this.backend.maxUploadBytes) return;
     this.saving = true;
@@ -889,6 +891,8 @@ export class PlatformPage implements OnInit {
     });
   }
 
+  /** «projects/12» → ['/app', 'projects', '12'] (si se pasa junto, Angular lo toma como una sola parte y no abre nada). */
+  linkParts(link: unknown): string[] { return ['/app', ...String(link || '').split('/').filter(Boolean)]; }
   /** Texto de la solicitud: «quiere cambiar a X por Y». */
   changeRequestText(r: Row): string {
     return `${r['requester_name']} quiere cambiar a «${r['current_name']}» por «${r['proposed_name'] || 'otro investigador'}» como responsable.`;
@@ -1046,18 +1050,16 @@ export class PlatformPage implements OnInit {
     this.openDialog({
       title: 'Editar datos del proyecto', confirmLabel: 'Guardar', values: {
         title: p['title'], description: p['description'] || '', objectives: p['objectives'] || '',
-        start_date: p['start_date'] || '', end_date: p['end_date'] || '' },
+        end_date: p['end_date'] || '' },
+      intro: `El proyecto inició el ${this.date(p['start_date'])}, día en que se aprobó la propuesta. El término real se marca solo cuando el proyecto se completa.`,
       fields: [
         { key: 'title', label: 'Título', type: 'text', required: true },
         { key: 'description', label: 'Descripción', type: 'textarea', required: true },
         { key: 'objectives', label: 'Objetivos', type: 'textarea', required: true },
-        { key: 'start_date', label: 'Fecha de inicio', type: 'date' },
-        { key: 'end_date', label: 'Fecha de término', type: 'date' },
+        { key: 'end_date', label: 'Término estimado (opcional)', type: 'date', min: String(p['start_date'] || '').slice(0, 10) || undefined,
+          hint: 'Una fecha aproximada para planear; se puede cambiar después.' },
       ],
       submit: async values => {
-        if (values['start_date'] && values['end_date'] && values['end_date'] < values['start_date']) {
-          throw new Error('La fecha de término debe ser posterior a la de inicio.');
-        }
         await this.post('projects/update.php', { project_id: p['id'], ...values });
         return 'Proyecto actualizado.';
       },
@@ -1236,7 +1238,10 @@ export class PlatformPage implements OnInit {
         fields: [
           { key: 'description', label: 'Descripción', type: 'textarea', required: true, placeholder: 'Ej.: Tomar muestras de agua en las 3 comunidades' },
           { key: 'participant_id', label: 'Responsable', type: 'select', required: true, options },
-          { key: 'deadline', label: 'Fecha límite', type: 'date', required: true, min: existing ? undefined : this.todayIso },
+          { key: 'deadline', label: 'Fecha límite', type: 'date', required: true,
+            // No puede ser antes del día en que se creó la actividad (al crearla: hoy).
+            min: existing ? String(existing['created_on'] || '').slice(0, 10) || undefined : this.todayIso,
+            hint: existing ? `Desde el ${this.date(existing['created_on'])}, día en que se creó la actividad.` : 'Desde hoy en adelante.' },
           { key: 'milestone_id', label: 'Hito al que pertenece', type: 'select', options: hitoOptions,
             hint: 'El hito se marca como alcanzado solo, cuando todas sus actividades están completadas.' },
           { key: 'file', label: existing ? 'Agregar material de apoyo (opcional)' : 'Material de apoyo (opcional)', type: 'file',
@@ -1262,6 +1267,63 @@ export class PlatformPage implements OnInit {
     if (loose.length || !groups.length) groups.push({ milestone: null, items: loose });
     // Al buscar, se ocultan los hitos sin coincidencias.
     return this.activityFilter.trim() ? groups.filter(g => g.items.length) : groups;
+  }
+  /** Arrastrar actividades entre hitos (o a «Sin hito»). */
+  dragActivity?: number;
+  dropTarget: string | null = null;
+  onDragStart(a: Row, event: DragEvent): void {
+    if (!this.canManagePlan || !this.projectEditable || a['status'] === 'cancelled') { event.preventDefault(); return; }
+    this.dragActivity = Number(a['id']);
+    event.dataTransfer?.setData('text/plain', String(a['id']));
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  }
+  onDragOver(target: string, event: DragEvent): void {
+    if (!this.dragActivity) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    this.dropTarget = target;
+  }
+  onDragLeave(target: string, event: DragEvent): void {
+    const to = event.relatedTarget as Node | null;
+    if (to && (event.currentTarget as HTMLElement).contains(to)) return;
+    if (this.dropTarget === target) this.dropTarget = null;
+  }
+  onDragEnd(): void { this.dragActivity = undefined; this.dropTarget = null; }
+  async onDrop(milestone: Row | null, event: DragEvent): Promise<void> {
+    event.preventDefault();
+    const id = this.dragActivity;
+    this.onDragEnd();
+    if (!id) return;
+    const activity = this.activities.find(a => Number(a['id']) === id);
+    const from = activity?.['milestone_id'] ? Number(activity['milestone_id']) : null;
+    const to = milestone ? Number(milestone['id']) : null;
+    if (!activity || from === to) return;
+    await this.moveActivities([id], to,
+      to ? `«${activity['description']}» ahora es parte del hito «${milestone!['description']}».` : `«${activity['description']}» quedó sin hito.`);
+  }
+  private async moveActivities(ids: number[], milestoneId: number | null, message: string): Promise<void> {
+    try {
+      for (const id of ids) await this.post('activities/set-milestone.php', { activity_id: id, milestone_id: milestoneId ?? '' });
+      this.say(message);
+      await this.load(true);
+    } catch (error) {
+      this.say(this.message(error, 'No se pudo mover la actividad.'), 'error');
+    }
+  }
+  /** Actividades sin hito que se pueden agregar a uno. */
+  get looseActivities(): Row[] { return this.activities.filter(a => !a['milestone_id'] && a['status'] !== 'cancelled'); }
+  addExistingToMilestone(m: Row): void {
+    const options = this.looseActivities.map(a => ({ value: String(a['id']), label: `${a['description']} · ${a['participant_name']} · vence ${this.date(a['deadline'])}` }));
+    this.openDialog({
+      title: `Agregar actividades a «${m['description']}»`, confirmLabel: 'Agregar al hito', values: {},
+      intro: 'Elige una o varias actividades que todavía no tienen hito. También puedes arrastrarlas sobre el hito.',
+      fields: [{ key: 'activity_ids', label: 'Actividades sin hito', type: 'checks', required: true, options }],
+      submit: async values => {
+        const ids: string[] = values['activity_ids'];
+        for (const id of ids) await this.post('activities/set-milestone.php', { activity_id: id, milestone_id: m['id'] });
+        return ids.length === 1 ? 'Actividad agregada al hito.' : `${ids.length} actividades agregadas al hito.`;
+      },
+    });
   }
   milestonePercent(m: Row): number { return Number(m['activity_count']) ? Math.round(100 * Number(m['completed_count']) / Number(m['activity_count'])) : 0; }
 
@@ -1341,7 +1403,7 @@ export class PlatformPage implements OnInit {
       values: existing ? { description: existing['description'], target_date: existing['target_date'] } : {},
       fields: [
         { key: 'description', label: 'Nombre del hito', type: 'text', required: true, placeholder: 'Ej.: Trabajo de campo' },
-        { key: 'target_date', label: 'Fecha meta', type: 'date', required: true },
+        { key: 'target_date', label: 'Fecha meta', type: 'date', required: true, min: String(p['start_date'] || '').slice(0, 10) || undefined },
       ],
       submit: async values => {
         const body = { project_id: p['id'], ...values };

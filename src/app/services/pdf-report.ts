@@ -290,7 +290,7 @@ export function createReportPdf(data: Row, t: ReportLabels): { bytes: Uint8Array
     x += pdf.badge(x, pdf.y, st.label, st.tone, 9) + 10;
     pdf.text(x, pdf.y, `Responsable: ${p.researcher_name || '—'}`, 10, 'F1', INK);
     pdf.y -= 16;
-    pdf.text(pdf.margin, pdf.y, `Inicio: ${t.date(p.start_date)}     Término: ${t.date(p.end_date)}`, 9, 'F1', MUTED);
+    pdf.text(pdf.margin, pdf.y, `Inicio: ${t.date(p.start_date)}     ${p.finished_on ? 'Término: ' + t.date(p.finished_on) : 'Término estimado: ' + (p.end_date ? t.date(p.end_date) : 'sin definir')}`, 9, 'F1', MUTED);
     pdf.y -= 20;
     if (p.status_note) pdf.paragraph(`Nota: ${p.status_note}`, 9, MUTED, 'F3');
 

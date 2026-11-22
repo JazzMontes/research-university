@@ -267,6 +267,10 @@ begin
   end if;
 end $$;
 
+-- Fecha de hoy en México (la base trabaja en UTC; de noche ya sería "mañana").
+create or replace function research.today()
+returns date language sql stable as $$ select (now() at time zone 'America/Mexico_City')::date $$;
+
 -- Gestiona el plan de trabajo (actividades e hitos): el responsable o un integrante con permiso.
 create or replace function research.can_manage(p research.projects, u research.users)
 returns boolean language sql stable

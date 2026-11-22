@@ -108,6 +108,16 @@ create table if not exists research.projects (
 -- Columnas agregadas en la versión 2 (por si la base ya existía).
 alter table research.projects add column if not exists description text;
 alter table research.projects add column if not exists objectives text;
+-- Fechas del proyecto: inicia el día en que se aprobó la propuesta; end_date es el término ESTIMADO
+-- y finished_on el término REAL (se marca al completarse o cancelarse; se borra si se reabre).
+alter table research.projects add column if not exists finished_on date;
+update research.projects set start_date = (created_at at time zone 'America/Mexico_City')::date
+  where start_date is distinct from (created_at at time zone 'America/Mexico_City')::date;
+update research.projects p set finished_on = coalesce(
+    (select (max(c.reviewed_at) at time zone 'America/Mexico_City')::date from research.closures c where c.project_id = p.id and c.status = 'approved'),
+    (p.updated_at at time zone 'America/Mexico_City')::date)
+  where p.status in ('finalized', 'cancelled') and p.finished_on is null;
+update research.projects set end_date = null where end_date is not null and end_date < start_date;
 alter table research.projects add column if not exists start_date date;
 alter table research.projects add column if not exists end_date date;
 alter table research.projects add column if not exists status_note text;
@@ -608,6 +618,10 @@ begin
   end if;
 end $$;
 
+-- Fecha de hoy en México (la base trabaja en UTC; de noche ya sería "mañana").
+create or replace function research.today()
+returns date language sql stable as $$ select (now() at time zone 'America/Mexico_City')::date $$;
+
 -- Gestiona el plan de trabajo (actividades e hitos): el responsable o un integrante con permiso.
 create or replace function research.can_manage(p research.projects, u research.users)
 returns boolean language sql stable
@@ -950,8 +964,9 @@ begin
   if not exists (select 1 from research.users where id = p.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
     perform research.fail(409, 'El investigador responsable ya no está activo. Cambia al responsable o solicita cambios al autor.');
   end if;
-  insert into research.projects (proposal_id, title, description, objectives, responsible_researcher_id)
-    values (p.id, p.title, p.description, p.objectives, p.responsible_researcher_id) returning id into new_project;
+  -- El proyecto inicia el día en que se aprueba la propuesta.
+  insert into research.projects (proposal_id, title, description, objectives, responsible_researcher_id, start_date)
+    values (p.id, p.title, p.description, p.objectives, p.responsible_researcher_id, research.today()) returning id into new_project;
   insert into research.participants (project_id, user_id, project_role)
     select new_project, x, case when x = p.responsible_researcher_id then 'Investigador responsable' else 'Autor de la propuesta' end
     from (select distinct unnest(array[p.responsible_researcher_id, p.author_id]) as x) s
@@ -1144,7 +1159,7 @@ begin
       if pj.id is not null and pj.status <> 'cancelled' then
         update research.closures set status = 'changes_requested', review_observations = 'Propuesta cancelada: ' || obs,
           reviewed_by = u.id, reviewed_at = now() where project_id = pj.id and status = 'pending';
-        update research.projects set status = 'cancelled', status_note = 'Se canceló la propuesta: ' || obs, updated_at = now() where id = pj.id;
+        update research.projects set status = 'cancelled', status_note = 'Se canceló la propuesta: ' || obs, finished_on = research.today(), updated_at = now() where id = pj.id;
         perform research.event_project(pj.id, u.id, 'project', pj.id, 'cancelled', jsonb_build_object('reason', 'Se canceló la propuesta: ' || obs));
       end if;
     end if;
@@ -1166,7 +1181,7 @@ begin
         if not exists (select 1 from research.users where id = pj.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
           perform research.fail(409, 'El investigador responsable del proyecto ya no está activo. Pide a Coordinación que lo cambie antes de reactivar.');
         end if;
-        update research.projects set status = 'active', status_note = null, updated_at = now() where id = pj.id;
+        update research.projects set status = 'active', status_note = null, finished_on = null, updated_at = now() where id = pj.id;
         perform research.event_project(pj.id, u.id, 'project', pj.id, 'reopened', jsonb_build_object('before', 'cancelled', 'reason', 'Se reactivó la propuesta.'));
       end if;
     end if;
@@ -1343,19 +1358,20 @@ begin
     -- El investigador responsable configura datos y fechas.
     perform research.project_lead(p, u);
     perform research.project_active(p);
-    v_start := research.opt_date(d, 'start_date');
+    -- El inicio no se edita: es el día en que se aprobó la propuesta. Solo se ajusta el término estimado.
+    v_start := p.start_date;
     v_end := research.opt_date(d, 'end_date');
-    if v_start is not null and v_end is not null and v_end < v_start then
-      perform research.fail(422, 'La fecha de término debe ser posterior a la fecha de inicio.');
+    if v_end is not null and v_start is not null and v_end < v_start then
+      perform research.fail(422, 'El término estimado no puede ser antes del inicio del proyecto (' || to_char(v_start, 'DD/MM/YYYY') || ').');
     end if;
     update research.projects set
       title = research.req_text(d, 'title', 250),
       description = research.req_text(d, 'description', 65535),
       objectives = research.req_text(d, 'objectives', 65535),
-      start_date = v_start, end_date = v_end, updated_at = now()
+      end_date = v_end, updated_at = now()
     where id = pid;
     perform research.event_project(pid, u.id, 'project', pid, 'configured',
-      jsonb_build_object('title', d -> 'title', 'start_date', v_start, 'end_date', v_end));
+      jsonb_build_object('title', d -> 'title', 'end_date', v_end));
     return research.ok(jsonb_build_object('project_id', pid));
   end if;
 
@@ -1369,7 +1385,7 @@ begin
     -- Si había una solicitud de cierre pendiente, se responde automáticamente.
     update research.closures set status = 'changes_requested', review_observations = 'Proyecto cancelado: ' || v_reason,
       reviewed_by = u.id, reviewed_at = now() where project_id = pid and status = 'pending';
-    update research.projects set status = 'cancelled', status_note = v_reason, updated_at = now() where id = pid;
+    update research.projects set status = 'cancelled', status_note = v_reason, finished_on = research.today(), updated_at = now() where id = pid;
     perform research.event_project(pid, u.id, 'project', pid, 'cancelled', jsonb_build_object('reason', v_reason));
     perform research.change_requests_cleanup();
     -- La propuesta de origen también queda cancelada (y vuelve a "Aprobada" si se reabre el proyecto).
@@ -1384,7 +1400,7 @@ begin
       perform research.fail(409, 'El investigador responsable ya no está activo. Reactiva su cuenta o, después de reabrir, cambia al responsable.');
     end if;
     v_reason := research.req_text(d, 'reason', 2000);
-    update research.projects set status = 'active', status_note = null, updated_at = now() where id = pid;
+    update research.projects set status = 'active', status_note = null, finished_on = null, updated_at = now() where id = pid;
     perform research.event_project(pid, u.id, 'project', pid, 'reopened', jsonb_build_object('before', p.status, 'reason', v_reason));
     -- Si el proyecto se había cancelado junto con su propuesta, la propuesta vuelve a "Aprobada".
     if exists (select 1 from research.proposals where id = p.proposal_id and status = 'cancelled' and status_before_cancel = 'approved') then
@@ -1479,6 +1495,7 @@ set search_path = research, extensions, pg_temp as $$
     'participant_name', (select name from research.users where id = a.participant_id),
     'project_title', (select title from research.projects where id = a.project_id),
     'deadline_status', research.deadline_status(a.status, a.deadline),
+    'created_on', (a.created_at at time zone 'America/Mexico_City')::date,
     'evidence_count', (select count(*) from research.documents dd where dd.activity_id = a.id and dd.kind = 'evidence' and dd.deleted_at is null),
     'milestones', (select coalesce(jsonb_agg(m.description), '[]') from research.milestone_activities ma
                    join research.milestones m on m.id = ma.milestone_id where ma.activity_id = a.id),
@@ -1562,13 +1579,19 @@ begin
     perform research.participant_valid(pid, uid);
     v_deadline := research.req_date(d, 'deadline');
     if act = 'create' then
-      if v_deadline < current_date then perform research.fail(422, 'La fecha límite ya pasó. Revisa el año y el mes.'); end if;
+      -- La fecha de entrega no puede ser anterior al día en que se crea la actividad.
+      if v_deadline < research.today() then perform research.fail(422, 'La fecha de entrega no puede ser anterior a hoy (' || to_char(research.today(), 'DD/MM/YYYY') || ').'); end if;
       insert into research.activities (project_id, description, participant_id, deadline)
         values (pid, research.req_text(d, 'description', 65535), uid, v_deadline) returning id into eid;
     else
       if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
       if a.status in ('completed', 'cancelled') then perform research.fail(409, 'La actividad está cerrada; ya no se edita.'); end if;
-      if v_deadline < current_date and v_deadline <> a.deadline then perform research.fail(422, 'La nueva fecha límite ya pasó.'); end if;
+      if v_deadline < (a.created_at at time zone 'America/Mexico_City')::date then
+        perform research.fail(422, 'La fecha de entrega no puede ser anterior al día en que se creó la actividad (' || to_char((a.created_at at time zone 'America/Mexico_City')::date, 'DD/MM/YYYY') || ').');
+      end if;
+      if v_deadline < research.today() and v_deadline <> a.deadline then
+        perform research.fail(422, 'La nueva fecha de entrega no puede ser anterior a hoy (' || to_char(research.today(), 'DD/MM/YYYY') || ').');
+      end if;
       update research.activities set description = research.req_text(d, 'description', 65535), participant_id = uid,
         deadline = v_deadline, updated_at = now() where id = eid;
     end if;
@@ -1601,6 +1624,13 @@ begin
     if a.status in ('completed', 'cancelled') then perform research.fail(409, 'La actividad ya está cerrada.'); end if;
     obs := research.req_text(d, 'reason', 2000);
     update research.activities set status = 'cancelled', observations = obs, updated_at = now() where id = eid;
+  elsif act = 'set-milestone' then
+    -- Mover una actividad a un hito (arrastrándola o eligiéndola desde el hito), o sacarla ("Sin hito").
+    if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
+    perform research.project_manager(p, u);
+    if a.status = 'cancelled' then perform research.fail(409, 'La actividad está cancelada.'); end if;
+    if not (d ? 'milestone_id') then d := d || jsonb_build_object('milestone_id', ''); end if;
+    perform research.activity_set_milestone(pid, eid, d);
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;
@@ -1661,6 +1691,9 @@ begin
     if (select count(*) from research.activities where id = any(ids) and project_id = pid) <> cardinality(ids) then
       perform research.fail(422, 'Una de las actividades no pertenece al proyecto.');
     end if;
+    if research.req_date(d, 'target_date') < coalesce(p.start_date, research.today()) then
+      perform research.fail(422, 'La fecha meta no puede ser antes del inicio del proyecto (' || to_char(coalesce(p.start_date, research.today()), 'DD/MM/YYYY') || ').');
+    end if;
     if act = 'create' then
       insert into research.milestones (project_id, description, target_date)
         values (pid, research.req_text(d, 'description', 65535), research.req_date(d, 'target_date')) returning id into eid;
@@ -1675,6 +1708,23 @@ begin
       delete from research.milestone_activities where activity_id = any(ids) and milestone_id <> eid;
       insert into research.milestone_activities (milestone_id, activity_id) select eid, unnest(ids) on conflict do nothing;
     end if;
+  elsif act = 'assign' then
+    -- Pasa actividades a este hito (o las deja sin hito si no se indica hito). Sirve para arrastrar y soltar.
+    x := coalesce(d -> 'activity_ids', '[]'::jsonb);
+    if jsonb_typeof(x) in ('string', 'number') then x := jsonb_build_array(x); end if;
+    if jsonb_typeof(x) <> 'array' or jsonb_array_length(x) = 0 then perform research.fail(422, 'Elige al menos una actividad.'); end if;
+    select coalesce(array_agg(distinct research.req_id(jsonb_build_object('id', e), 'id')), '{}') into ids from jsonb_array_elements(x) e;
+    if (select count(*) from research.activities where id = any(ids) and project_id = pid) <> cardinality(ids) then
+      perform research.fail(422, 'Una de las actividades no pertenece al proyecto.');
+    end if;
+    delete from research.milestone_activities where activity_id = any(ids) and milestone_id is distinct from m.id;
+    if m.id is not null then
+      insert into research.milestone_activities (milestone_id, activity_id) select m.id, unnest(ids) on conflict do nothing;
+    end if;
+    perform research.event_project(pid, u.id, 'milestone', coalesce(m.id, 0), 'assign', jsonb_build_object(
+      'description', coalesce(m.description, 'Sin hito'),
+      'activities', (select string_agg(description, ', ') from research.activities where id = any(ids))));
+    return research.ok(jsonb_build_object('milestone_id', m.id, 'activity_ids', to_jsonb(ids)));
   elsif act = 'delete' then
     -- Borrar un hito no toca sus actividades.
     if m.id is null then perform research.fail(404, 'Hito no disponible.'); end if;
@@ -1720,7 +1770,8 @@ begin
     eid := c.id;
     update research.closures set status = decision, review_observations = nullif(obs, ''), reviewed_by = u.id, reviewed_at = now() where id = eid;
     update research.projects set status = case when decision = 'approved' then 'finalized' else 'changes' end,
-      status_note = case when decision = 'approved' then null else obs end, updated_at = now() where id = pid;
+      status_note = case when decision = 'approved' then null else obs end,
+      finished_on = case when decision = 'approved' then research.today() else null end, updated_at = now() where id = pid;
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;
@@ -2338,10 +2389,10 @@ returns text language sql immutable as $$
     when 'participants/add' then 'POST' when 'participants/update' then 'POST' when 'participants/remove' then 'POST'
     when 'participants/permissions' then 'POST'
     when 'activities/list' then 'GET' when 'activities/detail' then 'GET'
-    when 'activities/create' then 'POST' when 'activities/update' then 'POST' when 'activities/submit' then 'POST'
+    when 'activities/create' then 'POST' when 'activities/update' then 'POST' when 'activities/set-milestone' then 'POST' when 'activities/submit' then 'POST'
     when 'activities/review' then 'POST' when 'activities/cancel' then 'POST'
     when 'milestones/list' then 'GET' when 'milestones/create' then 'POST' when 'milestones/update' then 'POST'
-    when 'milestones/delete' then 'POST'
+    when 'milestones/delete' then 'POST' when 'milestones/assign' then 'POST'
     when 'documents/list' then 'GET' when 'documents/versions' then 'GET' when 'documents/download' then 'GET'
     when 'documents/upload' then 'POST' when 'documents/upload-version' then 'POST' when 'documents/update' then 'POST'
     when 'documents/delete' then 'POST' when 'documents/set-restriction' then 'POST'

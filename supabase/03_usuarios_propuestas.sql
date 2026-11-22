@@ -233,8 +233,9 @@ begin
   if not exists (select 1 from research.users where id = p.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
     perform research.fail(409, 'El investigador responsable ya no está activo. Cambia al responsable o solicita cambios al autor.');
   end if;
-  insert into research.projects (proposal_id, title, description, objectives, responsible_researcher_id)
-    values (p.id, p.title, p.description, p.objectives, p.responsible_researcher_id) returning id into new_project;
+  -- El proyecto inicia el día en que se aprueba la propuesta.
+  insert into research.projects (proposal_id, title, description, objectives, responsible_researcher_id, start_date)
+    values (p.id, p.title, p.description, p.objectives, p.responsible_researcher_id, research.today()) returning id into new_project;
   insert into research.participants (project_id, user_id, project_role)
     select new_project, x, case when x = p.responsible_researcher_id then 'Investigador responsable' else 'Autor de la propuesta' end
     from (select distinct unnest(array[p.responsible_researcher_id, p.author_id]) as x) s
@@ -427,7 +428,7 @@ begin
       if pj.id is not null and pj.status <> 'cancelled' then
         update research.closures set status = 'changes_requested', review_observations = 'Propuesta cancelada: ' || obs,
           reviewed_by = u.id, reviewed_at = now() where project_id = pj.id and status = 'pending';
-        update research.projects set status = 'cancelled', status_note = 'Se canceló la propuesta: ' || obs, updated_at = now() where id = pj.id;
+        update research.projects set status = 'cancelled', status_note = 'Se canceló la propuesta: ' || obs, finished_on = research.today(), updated_at = now() where id = pj.id;
         perform research.event_project(pj.id, u.id, 'project', pj.id, 'cancelled', jsonb_build_object('reason', 'Se canceló la propuesta: ' || obs));
       end if;
     end if;
@@ -449,7 +450,7 @@ begin
         if not exists (select 1 from research.users where id = pj.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
           perform research.fail(409, 'El investigador responsable del proyecto ya no está activo. Pide a Coordinación que lo cambie antes de reactivar.');
         end if;
-        update research.projects set status = 'active', status_note = null, updated_at = now() where id = pj.id;
+        update research.projects set status = 'active', status_note = null, finished_on = null, updated_at = now() where id = pj.id;
         perform research.event_project(pj.id, u.id, 'project', pj.id, 'reopened', jsonb_build_object('before', 'cancelled', 'reason', 'Se reactivó la propuesta.'));
       end if;
     end if;
