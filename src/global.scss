@@ -35,3 +35,27 @@
 /* @import "@ionic/angular/css/palettes/dark.always.css"; */
 /* @import "@ionic/angular/css/palettes/dark.class.css"; */
 /* Las vistas conservan la paleta clara del diseño. */
+
+/* ===== Vista previa de archivos con formato (Word, Excel, PowerPoint, CSV, texto) ===== */
+.rv-docx-page { box-sizing: border-box; background: #fff; color: #000; margin: 0 auto 18px; box-shadow: 0 2px 10px #0002; line-height: 1.17; overflow-wrap: anywhere; text-align: left; }
+.rv-docx-page p { margin: 0; }
+.rv-docx-page .rv-num { display: inline-block; text-indent: 0; }
+.rv-docx-page .rv-tab { display: inline-block; width: 48px; }
+.rv-docx-page .rv-pagebreak { display: block; border-top: 1px dashed #bbb; margin: 18px -40px; }
+.rv-docx-page img { max-width: 100%; }
+.rv-docx-page a { color: #0563c1; }
+.rv-plain { white-space: pre-wrap; font-family: Consolas, 'Courier New', monospace; font-size: 10.5pt; }
+.rv-table { border-collapse: collapse; margin: 4px 0; max-width: 100%; }
+.rv-table td, .rv-table th { border: 1px solid #bfbfbf; padding: 3px 6px; vertical-align: top; }
+.rv-table.rv-noborder td { border-color: transparent; }
+.rv-csv { background: #fff; font-family: Calibri, Arial, sans-serif; font-size: 13px; }
+.rv-csv th { background: #f1f4f3; text-align: left; }
+.rv-sheet { border-collapse: collapse; background: #fff; table-layout: fixed; color: #000; }
+.rv-sheet td { border: 1px solid #e1e1e1; padding: 1px 4px; height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv-sheet th { background: #f3f3f3; color: #555; font-weight: 400; font-size: 11px; border: 1px solid #d4d4d4; text-align: center; position: sticky; top: 0; }
+.rv-sheet tbody th { position: sticky; left: 0; }
+.rv-sheet .rv-corner { z-index: 2; left: 0; }
+.rv-slide { position: relative; overflow: hidden; margin: 0 auto 18px; box-shadow: 0 2px 10px #0003; color: #000; }
+.rv-shape { position: absolute; box-sizing: border-box; }
+.rv-text { display: flex; flex-direction: column; padding: 4px 8px; overflow: hidden; line-height: 1.15; }
+.rv-text p { margin: 0; }

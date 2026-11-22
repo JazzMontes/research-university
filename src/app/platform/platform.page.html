@@ -346,7 +346,7 @@
             @if (proposal['justification']) { <h3>Justificación</h3><p class="prose">{{ proposal['justification'] }}</p> }
             @if (proposal['file']) {
               <h3>Archivo adjunto</h3>
-              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(proposal['file'].filename))" (click)="viewProposalFile()" title="Ver archivo">{{ extOf(proposal['file'].filename) }}</button><div class="file-main"><strong>{{ proposal['file'].filename }}</strong><small>{{ (proposal['file'].size_bytes / 1024) | number:'1.0-0' }} KB</small></div>
+              <div class="file-row"><button type="button" class="thumb-btn" (click)="viewProposalFile()" title="Ver archivo"><app-file-thumb module="proposals" [id]="+proposal['id']" [stamp]="proposal['file'].document_id + ':' + proposal['updated_at']" [name]="proposal['file'].filename"></app-file-thumb></button><div class="file-main"><strong>{{ proposal['file'].filename }}</strong><small>{{ (proposal['file'].size_bytes / 1024) | number:'1.0-0' }} KB</small></div>
                 <div class="row-actions"><button type="button" class="text-button view-btn" (click)="viewProposalFile()"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="downloadProposalFile()"><app-icon name="download"></app-icon>Descargar</button></div></div>
             }
             <div class="actions">
@@ -550,11 +550,11 @@
               @if (documents.length > 3) { <input class="tab-search" type="search" aria-label="Buscar documento" [(ngModel)]="documentFilter" placeholder="Buscar documento…"> }
               @for (d of visibleDocuments; track d.id) {
                 <div class="file-row">
-                  <button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(d.filename))" (click)="view('documents', d.id, undefined, d.title)" title="Ver archivo">{{ extOf(d.filename) }}</button>
+                  <button type="button" class="thumb-btn" (click)="view('documents', d.id, d.version, d.title, d.filename)" title="Ver archivo"><app-file-thumb module="documents" [id]="+d.id" [version]="+d.version" [name]="d.filename"></app-file-thumb></button>
                   <div class="file-main"><strong>{{ d.title }}</strong> @if (+d.restricted) { <span class="badge tone-neutral">Solo investigadores</span> }
                     <small>v{{ d.version }} · {{ d.filename }} · {{ d.uploaded_by_name }} · {{ date(d.updated_at) }}</small></div>
                   <div class="row-actions">
-                    <button type="button" class="text-button view-btn" (click)="view('documents', d.id, undefined, d.title)"><app-icon name="eye"></app-icon>Ver</button>
+                    <button type="button" class="text-button view-btn" (click)="view('documents', d.id, d.version, d.title, d.filename)"><app-icon name="eye"></app-icon>Ver</button>
                     <button type="button" class="text-button" (click)="download('documents', d.id)"><app-icon name="download"></app-icon>Descargar</button>
                     <button type="button" class="text-button" (click)="showVersions(d.id)"><app-icon name="clock"></app-icon>{{ versionsOf === d.id ? 'Ocultar versiones' : 'Versiones' }}</button>
                     @if (isMember && projectEditable) { <button type="button" class="text-button" (click)="uploadDocument(d)"><app-icon name="upload"></app-icon>Nueva versión</button> }
@@ -565,8 +565,8 @@
                 @if (versionsOf === d.id) {
                   <div class="versions">
                     @for (v of versions; track v.id) {
-                      <div class="list-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(v.filename))" (click)="view('documents', d.id, v.version, d.title + ' · v' + v.version)" title="Ver archivo">{{ extOf(v.filename) }}</button><div class="file-main"><strong>v{{ v.version }} · {{ v.filename }}</strong><small>{{ v.uploaded_by_name }} · {{ date(v.created_at) }}{{ v.note ? ' · ' + v.note : '' }}</small></div>
-                        <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('documents', d.id, v.version, d.title + ' · v' + v.version)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('documents', d.id, v.version)"><app-icon name="download"></app-icon>Descargar</button></div></div>
+                      <div class="list-row"><button type="button" class="thumb-btn" (click)="view('documents', d.id, v.version, d.title + ' · v' + v.version, v.filename)" title="Ver archivo"><app-file-thumb module="documents" [id]="+d.id" [version]="+v.version" [name]="v.filename"></app-file-thumb></button><div class="file-main"><strong>v{{ v.version }} · {{ v.filename }}</strong><small>{{ v.uploaded_by_name }} · {{ date(v.created_at) }}{{ v.note ? ' · ' + v.note : '' }}</small></div>
+                        <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('documents', d.id, v.version, d.title + ' · v' + v.version, v.filename)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('documents', d.id, v.version)"><app-icon name="download"></app-icon>Descargar</button></div></div>
                     }
                   </div>
                 }
@@ -620,15 +620,15 @@
           @if (activity['materials']?.length) {
             <section class="panel"><h2><app-icon name="file"></app-icon>Material de apoyo</h2>
               @for (f of activity['materials']; track f.id) {
-                <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(f.filename))" (click)="view('documents', f.id, undefined, f.title)" title="Ver archivo">{{ extOf(f.filename) }}</button><div class="file-main"><strong>{{ f.title }}</strong><small>{{ f.filename }} · {{ f.uploaded_by_name }} · {{ date(f.updated_at) }}</small></div>
-                  <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('documents', f.id, undefined, f.title)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('documents', f.id)"><app-icon name="download"></app-icon>Descargar</button></div></div>
+                <div class="file-row"><button type="button" class="thumb-btn" (click)="view('documents', f.id, undefined, f.title, f.filename, f.updated_at)" title="Ver archivo"><app-file-thumb module="documents" [id]="+f.id" [stamp]="f.updated_at" [name]="f.filename"></app-file-thumb></button><div class="file-main"><strong>{{ f.title }}</strong><small>{{ f.filename }} · {{ f.uploaded_by_name }} · {{ date(f.updated_at) }}</small></div>
+                  <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('documents', f.id, undefined, f.title, f.filename, f.updated_at)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('documents', f.id)"><app-icon name="download"></app-icon>Descargar</button></div></div>
               }
             </section>
           }
           <section class="panel tab-panel short"><h2>Evidencias</h2>
             @for (e of evidence; track e.id) {
-              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(e.filename))" (click)="view('evidence', e.id, undefined, e.title)" title="Ver archivo">{{ extOf(e.filename) }}</button><div class="file-main"><strong>{{ e.title }}</strong><small>{{ e.filename }} · {{ e.uploaded_by_name }} · {{ date(e.updated_at) }}</small></div>
-                <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('evidence', e.id, undefined, e.title)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('evidence', e.id)"><app-icon name="download"></app-icon>Descargar</button>
+              <div class="file-row"><button type="button" class="thumb-btn" (click)="view('evidence', e.id, undefined, e.title, e.filename, e.updated_at)" title="Ver archivo"><app-file-thumb module="evidence" [id]="+e.id" [stamp]="e.updated_at" [name]="e.filename"></app-file-thumb></button><div class="file-main"><strong>{{ e.title }}</strong><small>{{ e.filename }} · {{ e.uploaded_by_name }} · {{ date(e.updated_at) }}</small></div>
+                <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('evidence', e.id, undefined, e.title, e.filename, e.updated_at)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('evidence', e.id)"><app-icon name="download"></app-icon>Descargar</button>
                   @if (activityEditable && activityOpen && +e.created_by === me) { <button type="button" class="text-button danger-text" (click)="removeEvidence(e)"><app-icon name="trash"></app-icon>Quitar</button> }</div></div>
             } @empty { <p class="muted">Sin evidencias adjuntas.</p> }
           </section>
@@ -670,8 +670,8 @@
             @if (role === 'coordinator') { <button type="button" class="primary" (click)="uploadDocument(undefined, true)"><app-icon name="plus"></app-icon>Agregar fuente</button> }</div>
           <section class="panel tab-panel">
             @for (d of sources; track d.id) {
-              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(d.filename))" (click)="view('institutional-documents', d.id, undefined, d.title)" title="Ver archivo">{{ extOf(d.filename) }}</button><div class="file-main"><strong>{{ d.title }}</strong><small>v{{ d.version }} · {{ date(d.updated_at) }}{{ d.indexed ? '' : ' · sin texto para el asistente' }}</small></div>
-                <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('institutional-documents', d.id, undefined, d.title)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('institutional-documents', d.id)"><app-icon name="download"></app-icon>Descargar</button>
+              <div class="file-row"><button type="button" class="thumb-btn" (click)="view('institutional-documents', d.id, d.version, d.title, d.filename)" title="Ver archivo"><app-file-thumb module="institutional-documents" [id]="+d.id" [version]="+d.version" [name]="d.filename"></app-file-thumb></button><div class="file-main"><strong>{{ d.title }}</strong><small>v{{ d.version }} · {{ date(d.updated_at) }}{{ d.indexed ? '' : ' · sin texto para el asistente' }}</small></div>
+                <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('institutional-documents', d.id, d.version, d.title, d.filename)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('institutional-documents', d.id)"><app-icon name="download"></app-icon>Descargar</button>
                   @if (role === 'coordinator') {
                     <button type="button" class="text-button" (click)="uploadDocument(d, true)"><app-icon name="upload"></app-icon>Nueva versión</button>
                     <button type="button" class="text-button danger-text" (click)="deleteDocument(d, true)"><app-icon name="user-minus"></app-icon>Retirar</button>
@@ -780,33 +780,58 @@
     <div class="modal-backdrop" (click)="closeViewer()">
       <section class="modal viewer" role="dialog" aria-modal="true" aria-labelledby="viewer-title" (click)="$event.stopPropagation()" (keydown.escape)="closeViewer()">
         <header><h2 id="viewer-title"><app-icon name="eye" [size]="22"></app-icon><span>{{ viewer.title }}</span></h2><button type="button" (click)="closeViewer()" aria-label="Cerrar">×</button></header>
-        @if (viewer.loading) {
-          <div class="viewer-loading"><span class="spinner"></span>Abriendo archivo…</div>
-        } @else if (viewer.error) {
-          <p class="error" role="alert">{{ viewer.error }}</p>
-        } @else if (viewer.preview) {
-          @let pv = viewer.preview;
-          <div class="file-preview big">
-            @switch (pv.kind) {
-              @case ('image') { <img [src]="pv.src" [alt]="'Vista previa de ' + pv.name"> }
-              @case ('pdf') { <iframe [src]="pv.url" [title]="'Vista previa de ' + pv.name"></iframe> }
-              @case ('text') { <pre>{{ pv.text }}</pre> }
-              @default { <div class="file-card-big"><span class="file-ext" [style.background]="fileIcon(pv.ext)">{{ pv.ext }}</span><small>Este tipo de archivo no se puede ver aquí; descárgalo para abrirlo.</small></div> }
-            }
-            <div class="file-preview-foot">
-              <span class="file-ext small" [style.background]="fileIcon(pv.ext)">{{ pv.ext }}</span>
-              <div><strong>{{ pv.name }}</strong><small>{{ pv.size }}{{ pv.kind === 'text' && (pv.ext === 'DOCX' || pv.ext === 'XLSX') ? ' · se muestra solo el texto' : '' }}</small></div>
-            </div>
-          </div>
-        }
+        <ng-container *ngTemplateOutlet="stageView; context: { $implicit: viewer.stage, big: true }"></ng-container>
         <footer>
           <button class="secondary" type="button" (click)="closeViewer()">Cerrar</button>
-          @if (viewer.preview?.kind === 'pdf' || viewer.preview?.kind === 'image') { <button class="secondary" type="button" (click)="openViewerTab()"><app-icon name="next"></app-icon>Abrir en otra pestaña</button> }
-          <button class="primary" type="button" [disabled]="viewer.loading" (click)="viewer.download()"><app-icon name="download"></app-icon>Descargar</button>
+          @if (viewer.stage.blobUrl && (viewer.stage.render?.kind === 'pdf' || viewer.stage.render?.kind === 'image')) { <button class="secondary" type="button" (click)="openViewerTab()"><app-icon name="next"></app-icon>Abrir en otra pestaña</button> }
+          <button class="primary" type="button" [disabled]="viewer.stage.loading" (click)="viewer.download()"><app-icon name="download"></app-icon>Descargar</button>
         </footer>
       </section>
     </div>
   }
+
+  <!-- Vista previa con formato (se usa en el visor y al elegir un archivo en un formulario) -->
+  <ng-template #stageView let-st let-big="big">
+    <div class="stage" [class.big]="big">
+      @if (st.loading) {
+        <div class="viewer-loading"><span class="spinner"></span>{{ big ? 'Abriendo archivo…' : 'Preparando vista previa…' }}</div>
+      } @else if (st.error) {
+        <div class="file-card-big"><span class="file-ext" [style.background]="fileIcon(st.ext)">{{ st.ext }}</span><small>{{ st.error }}</small></div>
+      } @else {
+        @if (st.render?.kind === 'pdf' || st.render?.kind === 'doc') {
+          <div class="stage-tools">
+            <button type="button" class="icon-button" (click)="zoomStage(st, -0.1)" aria-label="Alejar">−</button>
+            <button type="button" class="text-button" (click)="zoomStage(st, 0)">{{ (st.zoom * 100) | number:'1.0-0' }}%</button>
+            <button type="button" class="icon-button" (click)="zoomStage(st, 0.1)" aria-label="Acercar">+</button>
+            @if (st.render?.kind === 'pdf') { <small class="muted">{{ pdfProgress(st) }}</small> }
+          </div>
+        }
+        <div class="stage-body">
+          @switch (st.render?.kind) {
+            @case ('image') { <img class="stage-img" [src]="st.render.src" [alt]="'Vista previa de ' + st.name"> }
+            @case ('pdf') {
+              <div class="stage-zoom" [style.zoom]="st.zoom">
+                @for (pg of st.render.pages; track $index) { <img class="pdf-page" [src]="pg" [alt]="'Página ' + ($index + 1)"> }
+              </div>
+            }
+            @case ('doc') { <div class="stage-zoom" [style.zoom]="st.zoom" [innerHTML]="st.html"></div> }
+            @case ('sheets') {
+              @if (st.render.sheets.length > 1) {
+                <div class="sheet-tabs">@for (sh of st.render.sheets; track $index) { <button type="button" [class.active]="st.sheet === $index" (click)="st.sheet = $index">{{ sh.name }}</button> }</div>
+              }
+              <div class="sheet-wrap" [innerHTML]="st.sheetsHtml?.[st.sheet]"></div>
+            }
+            @default { <div class="file-card-big"><span class="file-ext" [style.background]="fileIcon(st.ext)">{{ st.ext }}</span><small>Este tipo de archivo no se puede ver aquí; descárgalo para abrirlo.</small></div> }
+          }
+        </div>
+      }
+      <div class="file-preview-foot">
+        <span class="file-ext small" [style.background]="fileIcon(st.ext)">{{ st.ext }}</span>
+        <div><strong>{{ st.name }}</strong><small>{{ st.size }}</small></div>
+      </div>
+    </div>
+  </ng-template>
+
   @if (credentials && auth.user()) {
     <div class="modal-backdrop">
       <section class="modal credentials" role="dialog" aria-modal="true" aria-labelledby="cred-title" (keydown.escape)="closeCredentials()">
@@ -859,19 +884,8 @@
                 <input #fileInput [id]="'f_' + field.key" type="file" accept=".pdf,.doc,.docx,.xlsx,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg" (change)="chooseFile($event)"
                   [class.has-file]="!!filePreview">
                 @if (filePreview) {
-                  <div class="file-preview">
-                    @switch (filePreview.kind) {
-                      @case ('image') { <img [src]="filePreview.src" [alt]="'Vista previa de ' + filePreview.name"> }
-                      @case ('pdf') { <iframe [src]="filePreview.url" [title]="'Vista previa de ' + filePreview.name"></iframe> }
-                      @case ('text') { <pre>{{ filePreview.text }}</pre> }
-                      @default { <div class="file-card-big"><span class="file-ext" [style.background]="fileIcon(filePreview.ext)">{{ filePreview.ext }}</span><small>Sin vista previa para este tipo de archivo</small></div> }
-                    }
-                    <div class="file-preview-foot">
-                      <span class="file-ext small" [style.background]="fileIcon(filePreview.ext)">{{ filePreview.ext }}</span>
-                      <div><strong>{{ filePreview.name }}</strong><small>{{ filePreview.size }}</small></div>
-                      <button type="button" class="text-button danger-text" (click)="clearDialogFile(fileInput)"><app-icon name="trash"></app-icon>Quitar</button>
-                    </div>
-                  </div>
+                  <ng-container *ngTemplateOutlet="stageView; context: { $implicit: filePreview, big: false }"></ng-container>
+                  <button type="button" class="text-button danger-text remove-file" (click)="clearDialogFile(fileInput)"><app-icon name="trash"></app-icon>Quitar archivo</button>
                 }
               } @else if (field.type === 'password') {
                 <div class="password-box">

@@ -8,7 +8,7 @@
 import { ChangeDetectorRef, Component, ElementRef, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { IonicModule } from '@ionic/angular';
 import {
@@ -19,6 +19,9 @@ import { BackendService } from '../services/backend.service';
 import { extractOfficeText } from '../services/file-text';
 import { IconComponent } from './icon.component';
 import { downloadReportPdf } from '../services/pdf-report';
+import { FullRender, extOf, renderFull } from '../services/file-render';
+import { FileCacheService, FileSource } from '../services/file-cache.service';
+import { FileThumbComponent } from './file-thumb.component';
 import { AuthService } from '../auth/auth.service';
 import { AppNotification, NotificationsService } from '../services/notifications.service';
 
@@ -55,7 +58,11 @@ export interface Dialog {
 }
 
 interface ChatMessage { author: string; text: string; html?: string; pending?: boolean; attachment?: string; }
-interface FilePreview { name: string; size: string; ext: string; kind: 'image' | 'pdf' | 'text' | 'other'; url?: SafeResourceUrl; src?: string; text?: string; }
+/** Lo que se muestra en una vista previa (formulario o visor). */
+interface Stage {
+  name: string; ext: string; size: string; loading: boolean; error?: string; render?: FullRender; blobUrl?: string;
+  html?: SafeHtml; sheetsHtml?: SafeHtml[]; sheet: number; zoom: number; fitZoom: number; pageWidth?: number;
+}
 interface ChatAttachment { name: string; mime: string; size: number; data?: string; text?: string; }
 
 const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,72}$/;
@@ -63,7 +70,7 @@ const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,72}$/;
 @Component({
   selector: 'app-platform',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, IonicModule, IconComponent],
+  imports: [CommonModule, FormsModule, RouterLink, IonicModule, IconComponent, FileThumbComponent],
   templateUrl: './platform.page.html',
   styleUrls: ['./platform.page.scss'],
 })
@@ -164,7 +171,7 @@ export class PlatformPage implements OnInit {
   readonly projectFilters = PROJECT_FILTERS;
   readonly todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
-  constructor(private route: ActivatedRoute, private router: Router, public auth: AuthService, private sanitizer: DomSanitizer,
+  constructor(private route: ActivatedRoute, private router: Router, public auth: AuthService, private sanitizer: DomSanitizer, private fileCache: FileCacheService,
     private api: ApiService, private backend: BackendService, private changeDetector: ChangeDetectorRef,
     public notifications: NotificationsService) {}
 
@@ -644,74 +651,96 @@ export class PlatformPage implements OnInit {
     area.setSelectionRange(cursor, cursor);
   }
 
-  /** Vista previa del archivo elegido: imagen, PDF, texto o tarjeta con el tipo. */
-  filePreview?: FilePreview;
-  private previewUrl?: string;
+  /** Vista previa con formato del archivo elegido en un formulario (antes de guardarlo). */
+  filePreview?: Stage;
   private async buildPreview(file?: File): Promise<void> {
-    if (this.previewUrl) { URL.revokeObjectURL(this.previewUrl); this.previewUrl = undefined; }
+    this.releaseStage(this.filePreview);
     this.filePreview = undefined;
     if (!file) return;
-    const made = await this.makePreview(file);
-    this.previewUrl = made.objectUrl;
-    this.filePreview = made.preview;
-    this.changeDetector.markForCheck();
-  }
-  private async makePreview(file: File): Promise<{ preview: FilePreview; objectUrl?: string }> {
-    let objectUrl: string | undefined;
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const size = file.size >= 1048576 ? `${(file.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`;
-    const preview: FilePreview = { name: file.name, size, ext: ext.toUpperCase() || 'ARCHIVO', kind: 'other' };
-    if (/^image\//.test(file.type) || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
-      objectUrl = URL.createObjectURL(file); preview.kind = 'image'; preview.src = objectUrl;
-    } else if (ext === 'pdf') {
-      objectUrl = URL.createObjectURL(new Blob([file], { type: 'application/pdf' })); preview.kind = 'pdf';
-      preview.url = this.sanitizer.bypassSecurityTrustResourceUrl(objectUrl + '#navpanes=0&view=FitH');
-    } else if (['txt', 'md', 'csv'].includes(ext)) {
-      preview.kind = 'text'; preview.text = (await file.slice(0, 20000).text()).slice(0, 8000);
-    } else if (['docx', 'xlsx'].includes(ext)) {
-      try { const text = await extractOfficeText(file); if (text.trim()) { preview.kind = 'text'; preview.text = text.slice(0, 8000); } } catch { /* solo tarjeta */ }
-    }
-    return { preview, objectUrl };
+    this.filePreview = this.newStage(file.name, file.size);
+    await this.fillStage(this.filePreview, file);
   }
 
   /** Visor de archivos ya guardados (documentos, evidencias, material, propuesta, institucionales). */
-  viewer?: { title: string; loading: boolean; preview?: FilePreview; error?: string; download: () => Promise<void> };
-  private viewerUrl?: string;
-  async view(module: 'documents' | 'evidence' | 'institutional-documents', documentId: number, version?: number, title = ''): Promise<void> {
-    const params: Record<string, number> = { document_id: documentId };
-    if (version) params['version'] = version;
-    await this.openViewer(title, () => this.backend.fetchFile(module, params), () => this.download(module, documentId, version));
+  viewer?: { title: string; stage: Stage; download: () => Promise<void> };
+  async view(module: 'documents' | 'evidence' | 'institutional-documents', documentId: number, version?: number | null, title = '', name = '', stamp?: unknown): Promise<void> {
+    const src: FileSource = { module, id: documentId, version: version ?? null, stamp: (stamp as string) ?? null };
+    await this.openViewer(title, name, src, () => this.download(module, documentId, version ?? undefined));
   }
   async viewProposalFile(): Promise<void> {
     const p = this.proposal!;
-    await this.openViewer(p['file']?.['filename'] || 'Archivo de la propuesta',
-      () => this.backend.fetchFile('proposals', { proposal_id: p['id'] }, 'download-file'), () => this.downloadProposalFile());
+    const name = p['file']?.['filename'] || 'archivo';
+    await this.openViewer(name, name, { module: 'proposals', id: Number(p['id']), stamp: p['file']?.['document_id'] + ':' + p['updated_at'] },
+      () => this.downloadProposalFile());
   }
-  private async openViewer(title: string, fetch: () => Promise<File | null>, download: () => Promise<void>): Promise<void> {
+  private async openViewer(title: string, name: string, src: FileSource, download: () => Promise<void>): Promise<void> {
     this.closeViewer();
-    this.viewer = { title, loading: true, download };
+    const stage = this.newStage(name || title);
+    this.viewer = { title: title || name, stage, download };
     this.changeDetector.markForCheck();
     try {
-      const file = await fetch();
+      const file = await this.fileCache.file(src);
       if (!file) { this.viewer = undefined; await download(); return; }
-      const made = await this.makePreview(file);
-      if (!this.viewer) { if (made.objectUrl) URL.revokeObjectURL(made.objectUrl); return; }
-      this.viewerUrl = made.objectUrl;
-      this.viewer = { ...this.viewer, title: title || file.name, loading: false, preview: made.preview };
+      if (this.viewer?.stage !== stage) return;
+      stage.name = file.name; stage.size = this.sizeText(file.size); stage.ext = extOf(file.name).toUpperCase();
+      await this.fillStage(stage, file);
     } catch (error) {
-      if (this.viewer) this.viewer = { ...this.viewer, loading: false, error: this.message(error, 'No se pudo abrir el archivo.') };
-    } finally {
+      stage.loading = false; stage.error = this.message(error, 'No se pudo abrir el archivo.');
       this.changeDetector.markForCheck();
     }
   }
-  /** En celulares el PDF a veces no se ve dentro de la ventana: se abre en otra pestaña. */
-  openViewerTab(): void { if (this.viewerUrl) window.open(this.viewerUrl, '_blank'); }
   closeViewer(): void {
-    if (this.viewerUrl) { URL.revokeObjectURL(this.viewerUrl); this.viewerUrl = undefined; }
+    if (this.viewer) this.releaseStage(this.viewer.stage);
     this.viewer = undefined;
   }
-  /** Tipo de archivo (PDF, DOCX…) para la etiqueta de color en las listas. */
-  extOf(name: unknown): string { const m = /\.([a-z0-9]+)$/i.exec(String(name || '')); return m ? m[1].toUpperCase() : 'ARCH'; }
+  /** En celulares el PDF a veces conviene abrirlo aparte: se abre el archivo original en otra pestaña. */
+  async openViewerTab(): Promise<void> {
+    const stage = this.viewer?.stage;
+    if (stage?.blobUrl) window.open(stage.blobUrl, '_blank');
+  }
+
+  private sizeText(bytes: number): string { return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`; }
+  private newStage(name: string, bytes?: number): Stage {
+    return { name, ext: extOf(name).toUpperCase(), size: bytes ? this.sizeText(bytes) : '', loading: true, zoom: 1, fitZoom: 1, sheet: 0 };
+  }
+  private async fillStage(stage: Stage, file: File): Promise<void> {
+    try {
+      stage.blobUrl = URL.createObjectURL(file);
+      const render = await renderFull(file, file.name, pages => {
+        if (stage.render?.kind === 'pdf') { stage.render = { ...stage.render, pages }; this.changeDetector.markForCheck(); }
+      });
+      stage.render = render;
+      if (render.kind === 'doc') {
+        stage.html = this.sanitizer.bypassSecurityTrustHtml(render.html);
+        stage.pageWidth = render.width;
+      }
+      if (render.kind === 'sheets') stage.sheetsHtml = render.sheets.map(sh => this.sanitizer.bypassSecurityTrustHtml(sh.html));
+      if (render.kind === 'pdf') stage.pageWidth = 900;
+      // Ajusta al ancho de la ventana (en celular las hojas se ven completas).
+      const inViewer = this.viewer?.stage === stage;
+      const room = Math.min(window.innerWidth * 0.96, inViewer ? 1000 : 620) - (inViewer ? 90 : 110);
+      stage.fitZoom = stage.pageWidth ? Math.min(1, Math.max(0.3, room / (stage.pageWidth + 40))) : 1;
+      stage.zoom = stage.fitZoom;
+    } catch (error) {
+      stage.error = this.message(error, 'No se pudo mostrar la vista previa; puedes descargarlo para abrirlo.');
+    } finally {
+      stage.loading = false;
+      this.changeDetector.markForCheck();
+    }
+  }
+  private releaseStage(stage?: Stage): void {
+    if (!stage) return;
+    if (stage.blobUrl) URL.revokeObjectURL(stage.blobUrl);
+    if (stage.render?.kind === 'image') URL.revokeObjectURL(stage.render.src);
+  }
+  pdfProgress(stage: Stage): string {
+    const r = stage.render;
+    if (r?.kind !== 'pdf') return '';
+    return r.pages.length < r.total ? `Cargando página ${r.pages.length + 1} de ${r.total}…` : `${r.total} página(s)`;
+  }
+  zoomStage(stage: Stage, delta: number): void { stage.zoom = delta ? Math.min(2.5, Math.max(0.25, +(stage.zoom + delta).toFixed(2))) : stage.fitZoom; }
+  /** Tipo de archivo (PDF, DOCX…) para etiquetas. */
+  extOf(name: unknown): string { return extOf(String(name || '')).toUpperCase() || 'ARCH'; }
   fileIcon(ext: string): string {
     return ({ PDF: '#c0392b', DOC: '#2b5797', DOCX: '#2b5797', XLS: '#1e7145', XLSX: '#1e7145', CSV: '#1e7145', PPT: '#d24726', PPTX: '#d24726' } as Record<string, string>)[ext] || '#5b6b68';
   }
