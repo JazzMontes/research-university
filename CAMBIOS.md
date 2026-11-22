@@ -126,3 +126,17 @@ Pendiente → Entregar → En revisión → Aceptar (**Completada**) o Pedir cam
 - **Actividades con archivo**: al crear o editar una actividad se puede adjuntar material de apoyo opcional (guía, formato, etc.), que se descarga desde el detalle de la actividad.
 - **Hitos y actividades juntos**: la pestaña «Hitos» desaparece; «Actividades» muestra el **Plan de trabajo**, cada hito con su barra de avance y sus actividades, y al final las que no tienen hito. Cada actividad elige su hito al crearla, o se agrega con el botón «Actividad» dentro del hito.
 - Requiere ejecutar `supabase/instalar_todo.sql`.
+
+## Versión 3.14
+
+- **Recuperar contraseña**: se pide el correo registrado. Si no hay cuenta con ese correo, la app lo dice claramente. El correo trae el **usuario** además del código, y al terminar la app muestra tu usuario y lo deja escrito para entrar.
+- **Contraseña temporal automática**: al crear un usuario (o asignarle una contraseña nueva) se genera sola, tipo `Ana4821`. Aparece una ventana con el usuario y la contraseña y el botón **Copiar usuario y contraseña** para mandárselos a la persona.
+- **Vista previa de archivos**: al elegir un archivo se ve la imagen, el PDF, el texto (también Word y Excel) o una tarjeta con el tipo; se puede quitar antes de guardar. En el chat, las imágenes adjuntas muestran miniatura.
+- **Viñetas en Objetivos**: escribir `* ` al inicio de una línea la convierte en `• `; Enter continúa la lista y Enter en una viñeta vacía la termina.
+- **Editar propuesta antes de que la revisen**: el autor puede corregirla mientras sigue en revisión.
+- **Aprobación más simple**: la propuesta de un estudiante solo la aprueba su investigador (se crea el proyecto en ese momento). La de un investigador la aprueba Coordinación. La de Coordinación se aprueba sola.
+- **Cambio de investigador**: mientras sea propuesta, el estudiante lo cambia directamente. En un proyecto, quien pide el cambio **elige al nuevo investigador**; Coordinación ve «X quiere cambiar a A por B» y solo aprueba o rechaza.
+- **Solicitudes que ya no aplican se cierran solas** (proyecto o propuesta cancelada, responsable ya cambiado, etc.); ya no aparecen en Inicio ni dejan llenar datos en balde.
+- **Permisos para integrantes**: en Equipo, el investigador responsable puede **Dar permisos** a un estudiante para crear, editar y revisar actividades e hitos (nadie revisa su propia entrega).
+- Los buscadores ya no dicen «(se actualiza mientras escribes)».
+- Requiere ejecutar `supabase/instalar_todo.sql` y publicar de nuevo la función `asistente`.

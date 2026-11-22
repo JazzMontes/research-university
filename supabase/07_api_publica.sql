@@ -28,6 +28,7 @@ returns text language sql immutable as $$
     when 'projects/update' then 'POST' when 'projects/change-researcher' then 'POST'
     when 'projects/cancel' then 'POST' when 'projects/reopen' then 'POST'
     when 'participants/add' then 'POST' when 'participants/update' then 'POST' when 'participants/remove' then 'POST'
+    when 'participants/permissions' then 'POST'
     when 'activities/list' then 'GET' when 'activities/detail' then 'GET'
     when 'activities/create' then 'POST' when 'activities/update' then 'POST' when 'activities/submit' then 'POST'
     when 'activities/review' then 'POST' when 'activities/cancel' then 'POST'

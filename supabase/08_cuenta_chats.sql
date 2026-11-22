@@ -99,11 +99,11 @@ security definer
 set search_path = research, extensions, pg_temp as $$
 declare u research.users; code text;
 begin
+  -- Se recupera con el correo registrado; el correo incluye el usuario por si se olvidó.
   select * into u from research.users
-    where status = 'active' and (lower(username) = lower(btrim(identifier)) or lower(email) = lower(btrim(identifier)))
-    order by (lower(username) = lower(btrim(identifier))) desc limit 1;
+    where deleted_at is null and lower(email) = lower(btrim(identifier)) order by (status = 'active') desc, id limit 1;
   if u.id is null then return jsonb_build_object('result', 'not_found'); end if;
-  if u.email is null or btrim(u.email) = '' then return jsonb_build_object('result', 'no_email'); end if;
+  if u.status <> 'active' then return jsonb_build_object('result', 'inactive'); end if;
   if exists (select 1 from research.password_resets where user_id = u.id and created_at > now() - interval '60 seconds') then
     return jsonb_build_object('result', 'wait');
   end if;
@@ -112,7 +112,7 @@ begin
   update research.password_resets set used_at = now() where user_id = u.id and used_at is null;
   insert into research.password_resets (user_id, code_hash, expires_at)
     values (u.id, research.sha256(u.id || ':' || code), now() + interval '15 minutes');
-  return jsonb_build_object('result', 'ok', 'email', u.email, 'name', u.name, 'code', code);
+  return jsonb_build_object('result', 'ok', 'email', u.email, 'name', u.name, 'username', u.username, 'code', code);
 end $$;
 revoke all on function public.research_password_reset_issue(text) from public;
 do $$ begin
@@ -158,7 +158,7 @@ begin
   update research.password_resets set used_at = now() where id = r.id;
   update research.users set password_hash = research.hash_password(v_new), must_change_password = 0, updated_at = now() where id = u.id;
   update research.user_sessions set revoked_at = now() where user_id = u.id and revoked_at is null;
-  return research.ok(jsonb_build_object('message', 'Contraseña actualizada. Ya puedes iniciar sesión.'));
+  return research.ok(jsonb_build_object('message', 'Contraseña actualizada. Ya puedes iniciar sesión.', 'username', u.username));
 end $$;
 
 -- ------------------------------------------------------------------
@@ -226,8 +226,42 @@ set search_path = research, extensions, pg_temp as $$
     'reviewer_name', (select name from research.users where id = c.reviewed_by),
     'target_title', coalesce((select title from research.projects where id = c.project_id), (select title from research.proposals where id = c.proposal_id)),
     'target_kind', case when c.project_id is not null then 'project' else 'proposal' end,
+    'target_status', coalesce((select status from research.projects where id = c.project_id), (select status from research.proposals where id = c.proposal_id)),
     'link', case when c.project_id is not null then 'projects/' || c.project_id else 'proposals/' || c.proposal_id end);
 $$;
+
+-- Cierra solas las solicitudes que ya no aplican, para que Coordinación no trabaje en balde.
+create or replace function research.change_requests_cleanup()
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare c record; why text;
+begin
+  for c in select r.id, r.project_id, r.proposal_id, r.requested_by, r.current_researcher_id,
+                  pj.status pj_status, pj.responsible_researcher_id pj_resp, pr.status pr_status, pr.responsible_researcher_id pr_resp
+           from research.researcher_change_requests r
+           left join research.projects pj on pj.id = r.project_id
+           left join research.proposals pr on pr.id = r.proposal_id
+           where r.status = 'pending' for update of r loop
+    why := null;
+    if c.project_id is not null then
+      if c.pj_status = 'cancelled' then why := 'El proyecto fue cancelado.';
+      elsif c.pj_status = 'finalized' then why := 'El proyecto ya se completó.';
+      elsif c.pj_resp is distinct from c.current_researcher_id then why := 'El investigador responsable ya se cambió.';
+      elsif not exists (select 1 from research.participants t where t.project_id = c.project_id and t.user_id = c.requested_by and t.is_active = 1) then
+        why := 'Quien la pidió ya no está en el equipo.';
+      end if;
+    else
+      if c.pr_status = 'cancelled' then why := 'La propuesta fue cancelada.';
+      elsif c.pr_status = 'rejected' then why := 'La propuesta fue rechazada.';
+      elsif c.pr_status = 'approved' then why := 'La propuesta ya se convirtió en proyecto.';
+      elsif c.pr_resp is distinct from c.current_researcher_id then why := 'El investigador responsable ya se cambió.';
+      end if;
+    end if;
+    if why is not null then
+      update research.researcher_change_requests set status = 'closed', review_note = 'Se cerró sola: ' || why, reviewed_at = now() where id = c.id;
+    end if;
+  end loop;
+end $$;
 
 create or replace function research.ep_changes(u research.users, act text, d jsonb)
 returns jsonb language plpgsql
@@ -235,6 +269,7 @@ set search_path = research, extensions, pg_temp as $$
 declare c research.researcher_change_requests; p research.projects; pr research.proposals; rid integer; decision text; note text;
 begin
   if act = 'list' then
+    perform research.change_requests_cleanup();
     return research.ok(jsonb_build_object('items', (
       select coalesce(jsonb_agg(research.change_request_json(x) order by x.id desc), '[]') from research.researcher_change_requests x
       where (u.role = 'coordinator' and x.status = 'pending') or x.requested_by = u.id)));
@@ -252,18 +287,16 @@ begin
         perform research.fail(409, 'Ya hay una solicitud de cambio pendiente para este proyecto.');
       end if;
     else
-      select * into pr from research.proposals where id = research.req_id(d, 'proposal_id') for update;
-      if pr.id is null or pr.author_id <> u.id then perform research.fail(404, 'Propuesta no disponible.'); end if;
-      if pr.status in ('approved', 'rejected', 'cancelled') then perform research.fail(409, 'La propuesta ya está cerrada.'); end if;
-      if pr.responsible_researcher_id = u.id then perform research.fail(409, 'Ya eres el investigador responsable.'); end if;
-      if exists (select 1 from research.researcher_change_requests where proposal_id = pr.id and status = 'pending') then
-        perform research.fail(409, 'Ya hay una solicitud de cambio pendiente para esta propuesta.');
-      end if;
+      -- En etapa de propuesta no hace falta Coordinación: el autor cambia al investigador desde la propuesta.
+      perform research.fail(409, 'Mientras sea propuesta, puedes cambiar al investigador tú misma desde la propuesta (botón «Cambiar investigador»).');
     end if;
     note := research.req_text(d, 'reason', 2000);
     if length(btrim(note)) < 10 then perform research.fail(422, 'Explica el motivo con un poco más de detalle.'); end if;
-    rid := case when research.has(d, 'proposed_researcher_id') then research.req_id(d, 'proposed_researcher_id') end;
-    if rid is not null then perform research.active_role(rid, 'researcher'); end if;
+    -- Quien pide el cambio elige al nuevo responsable; Coordinación solo aprueba o rechaza.
+    if not research.has(d, 'proposed_researcher_id') then perform research.fail(422, 'Elige al investigador que quieres como nuevo responsable.'); end if;
+    rid := research.req_id(d, 'proposed_researcher_id');
+    if rid = p.responsible_researcher_id then perform research.fail(422, 'Esa persona ya es la responsable; elige a otro investigador.'); end if;
+    perform research.active_role(rid, 'researcher');
     insert into research.researcher_change_requests (project_id, proposal_id, requested_by, current_researcher_id, proposed_researcher_id, reason)
       values (p.id, pr.id, u.id, coalesce(p.responsible_researcher_id, pr.responsible_researcher_id), rid, note)
       returning * into c;
@@ -274,12 +307,16 @@ begin
     if u.role <> 'coordinator' then perform research.fail(403, 'Solo Coordinación resuelve las solicitudes.'); end if;
     select * into c from research.researcher_change_requests where id = research.req_id(d, 'request_id') for update;
     if c.id is null then perform research.fail(404, 'Solicitud no encontrada.'); end if;
+    perform research.change_requests_cleanup();
+    select * into c from research.researcher_change_requests where id = c.id;
+    if c.status = 'closed' then perform research.fail(409, 'Esta solicitud ya no aplica. ' || replace(coalesce(c.review_note, ''), 'Se cerró sola: ', '')); end if;
     if c.status <> 'pending' then perform research.fail(409, 'Esa solicitud ya se resolvió.'); end if;
     decision := research.req_text(d, 'decision', 20);
     if decision not in ('approved', 'rejected') then perform research.fail(422, 'Decisión inválida.'); end if;
     note := case when decision = 'rejected' then research.req_text(d, 'note', 2000) else research.opt_text(d, 'note', 2000) end;
     if decision = 'approved' then
-      rid := coalesce(case when research.has(d, 'researcher_id') then research.req_id(d, 'researcher_id') end, c.proposed_researcher_id);
+      -- Se usa el investigador que eligió quien pidió el cambio (solicitudes antiguas sin elegido: Coordinación lo indica).
+      rid := coalesce(c.proposed_researcher_id, case when research.has(d, 'researcher_id') then research.req_id(d, 'researcher_id') end);
       if rid is null then perform research.fail(422, 'Elige al nuevo investigador responsable.'); end if;
       if c.project_id is not null then
         select * into p from research.projects where id = c.project_id for update;
@@ -398,7 +435,7 @@ begin
   end if;
   if new.action = 'review_approved' then
     perform research.notify(array_remove(array[x.author_id], new.actor_id),
-      case when new.new_status = 'approved' then '🎉 ¡Aprobaron tu propuesta «' || t || '»!' else 'Tu propuesta «' || t || '» pasó a Coordinación' end,
+      '🎉 ¡Aprobaron tu propuesta «' || t || '»!',
       new.details, link, 'done');
   elsif new.action = 'review_changes_requested' then
     perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Te pidieron cambios en «' || t || '»', new.details, link, 'changes');
@@ -423,7 +460,9 @@ begin
       (j ->> 'requester_name') || ': ' || left(new.reason, 200), 'dashboard', 'progress');
   elsif new.status <> old.status then
     perform research.notify(array[new.requested_by],
-      case when new.status = 'approved' then 'Aprobaron tu solicitud de cambio de investigador' else 'Rechazaron tu solicitud de cambio de investigador' end,
+      case new.status when 'approved' then 'Aprobaron tu solicitud de cambio de investigador'
+                      when 'closed' then 'Se cerró tu solicitud de cambio de investigador'
+                      else 'Rechazaron tu solicitud de cambio de investigador' end,
       coalesce(new.review_note, j ->> 'target_title'), j ->> 'link', case when new.status = 'approved' then 'done' else 'cancelled' end);
   end if;
   return null;

@@ -267,6 +267,23 @@ begin
   end if;
 end $$;
 
+-- Gestiona el plan de trabajo (actividades e hitos): el responsable o un integrante con permiso.
+create or replace function research.can_manage(p research.projects, u research.users)
+returns boolean language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select (u.role in ('researcher', 'coordinator') and p.responsible_researcher_id = u.id)
+      or exists (select 1 from research.participants t where t.project_id = p.id and t.user_id = u.id and t.is_active = 1 and t.can_manage = 1);
+$$;
+
+create or replace function research.project_manager(p research.projects, u research.users)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+begin
+  if not research.can_manage(p, u) then
+    perform research.fail(403, 'Necesitas que el investigador responsable te dé permiso para gestionar el plan de trabajo.');
+  end if;
+end $$;
+
 create or replace function research.project_active(p research.projects)
 returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$

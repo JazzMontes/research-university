@@ -21,12 +21,26 @@ jobs:
       PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
     steps:
+      # Sin los secretos no falla (y no manda correos): solo avisa y se salta.
+      # En ese caso publica la función a mano desde el Dashboard de Supabase (Edge Functions → asistente → Code).
+      - name: Comprobar secretos
+        id: secreto
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$PROJECT_REF" ]; then
+            echo "::notice::Faltan SUPABASE_ACCESS_TOKEN o SUPABASE_PROJECT_REF: se omite el despliegue automático."
+            echo "listo=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "listo=si" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
+        if: steps.secreto.outputs.listo == 'si'
       - uses: supabase/setup-cli@v1
+        if: steps.secreto.outputs.listo == 'si'
         with:
           version: latest
       - name: Guardar la clave de IA
-        if: env.AI_API_KEY != ''
+        if: steps.secreto.outputs.listo == 'si' && env.AI_API_KEY != ''
         run: supabase secrets set AI_API_KEY="$AI_API_KEY" --project-ref "$PROJECT_REF"
       - name: "Desplegar función (sin verificación JWT: la sesión la valida la base)"
+        if: steps.secreto.outputs.listo == 'si'
         run: supabase functions deploy asistente --project-ref "$PROJECT_REF" --no-verify-jwt

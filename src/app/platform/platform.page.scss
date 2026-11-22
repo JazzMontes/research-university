@@ -332,6 +332,28 @@ nav a.active app-icon { opacity: 1; }
 .milestone-group .list-row { padding: 12px 14px; }
 .milestone-group .list-row small app-icon { margin: 0 2px 0 0; }
 .empty-group { padding: 12px 14px; margin: 0; font-size: 13px; }
+
+/* Vista previa del archivo elegido */
+.file-preview { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-top: 8px; background: #fafcfb; }
+.file-preview img { display: block; width: 100%; max-height: 260px; object-fit: contain; background: #f1f4f3; }
+.file-preview iframe { display: block; width: 100%; height: 300px; border: 0; background: white; }
+.file-preview pre { margin: 0; padding: 12px 14px; max-height: 200px; overflow: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; background: white; color: #33433f; }
+.file-card-big { display: grid; place-items: center; gap: 8px; padding: 24px 12px; }
+.file-card-big .file-ext { width: 64px; height: 76px; font-size: 14px; border-radius: 8px; }
+.file-preview-foot { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line); background: white; }
+.file-preview-foot > div { flex: 1; min-width: 0; display: grid; }
+.file-preview-foot strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.file-preview-foot small { font-size: 12px; color: var(--muted, #6b7b78); }
+.file-ext { display: inline-grid; place-items: center; color: white; font-weight: 700; letter-spacing: .3px; border-radius: 6px; }
+.file-ext.small { width: 38px; height: 30px; font-size: 10px; flex-shrink: 0; }
+input[type=file].has-file { font-size: 12px; }
+.attach-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+
+/* Datos de una cuenta nueva para compartir */
+.cred-box { display: grid; gap: 10px; background: #f2f8f6; border: 1px dashed #9cc8bd; border-radius: 12px; padding: 16px; margin: 6px 0 4px; }
+.cred-box > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.cred-box small { color: #5b6b68; }
+.cred-box strong { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 17px; letter-spacing: .5px; user-select: all; }
 /* Diálogo */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: #082b2780; display: grid; place-items: center; padding: 22px; }
 .modal { background: white; border-radius: 14px; width: min(620px, 100%); max-height: 90vh; overflow-y: auto; padding: 26px 28px; box-shadow: 0 15px 80px #123c3433; border-top: 6px solid var(--green); }

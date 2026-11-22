@@ -1,8 +1,8 @@
 -- =====================================================================
 -- URPMP · 03 · Usuarios, catálogos, propuestas y tablero (versión 3)
 -- Flujo de propuestas (sin evaluador):
---  Estudiante registra → Investigador responsable revisa → Coordinación decide.
---  Investigador registra su propia propuesta → Coordinación decide.
+--  Estudiante registra → Investigador responsable revisa y aprueba (se crea el proyecto).
+--  Investigador registra su propia propuesta → Coordinación decide. Coordinación registra → proyecto directo.
 --  Quien revisa puede: Aprobar · Solicitar cambios · Rechazar.
 --  Cuando Coordinación aprueba se crea el proyecto automáticamente.
 --  Con "Cambios solicitados" el autor corrige y reenvía en un solo paso;
@@ -334,8 +334,17 @@ begin
       from research.documents dd join research.document_versions v on v.document_id = dd.id
       where dd.proposal_id = pid and dd.deleted_at is null order by v.id desc limit 1));
   elsif act = 'change-researcher' then
-    if u.role <> 'coordinator' then perform research.fail(403, 'Solo Coordinación cambia al investigador responsable.'); end if;
-    perform research.proposal_set_researcher(p, research.req_id(d, 'researcher_id'), u.id, research.opt_text(d, 'reason', 2000));
+    -- En etapa de propuesta el estudiante autor cambia de investigador él mismo (sin pasar por Coordinación).
+    if not (u.role = 'coordinator' or (p.author_id = u.id and u.role = 'student')) then
+      perform research.fail(403, 'Solo el autor de la propuesta o Coordinación pueden cambiar al investigador.');
+    end if;
+    if u.role = 'student' and before_s not in ('pending_researcher_review', 'changes_requested') then
+      perform research.fail(409, 'Ya no se puede cambiar al investigador en esta etapa.');
+    end if;
+    researcher := research.req_id(d, 'researcher_id');
+    perform research.proposal_set_researcher(p, researcher, u.id, research.opt_text(d, 'reason', 2000));
+    update research.researcher_change_requests set status = 'closed', reviewed_at = now(),
+      review_note = 'Se cerró: el investigador responsable ya se cambió desde la propuesta.' where proposal_id = pid and status = 'pending';
     return research.ok(jsonb_build_object('proposal_id', pid, 'status', before_s));
   elsif act = 'history' then
     return research.ok(jsonb_build_object('items', (
@@ -345,12 +354,17 @@ begin
   elsif act = 'update' then
     -- Corregir y reenviar en un solo paso.
     if p.author_id <> u.id then perform research.fail(403, 'Solo el autor puede corregir la propuesta.'); end if;
-    if before_s <> 'changes_requested' then perform research.fail(409, 'La propuesta no tiene cambios solicitados.'); end if;
+    if before_s not in ('changes_requested', 'pending_researcher_review', 'pending_coordinator') then
+      perform research.fail(409, 'La propuesta ya fue revisada; ya no se puede editar.');
+    end if;
     update research.proposals set title = research.req_text(d, 'title', 250),
       description = research.req_text(d, 'description', 65535), objectives = research.req_text(d, 'objectives', 65535),
       updated_at = now() where id = pid;
     perform research.proposal_file_save(pid, u.id, d);
-    after_s := coalesce(p.returns_to, case when u.role = 'student' then 'pending_researcher_review' else 'pending_coordinator' end);
+    -- Si todavía nadie la revisa, se edita sin cambiar de estado.
+    after_s := case when before_s = 'changes_requested'
+                    then coalesce(p.returns_to, case when u.role = 'student' then 'pending_researcher_review' else 'pending_coordinator' end)
+                    else before_s end;
     -- Si el estudiante eligió mal al investigador, lo corrige aquí; el nuevo investigador la revisa desde el inicio.
     if u.role = 'student' and research.has(d, 'responsible_researcher_id') then
       researcher := research.req_id(d, 'responsible_researcher_id');
@@ -362,8 +376,16 @@ begin
       end if;
     end if;
     update research.proposals set returns_to = null where id = pid;
-    obs := coalesce(obs, '') || case when after_s = 'pending_coordinator' then 'Corregida y reenviada a Coordinación.' else 'Corregida y reenviada al investigador responsable.' end;
-    log_action := 'resubmit';
+    if before_s = 'changes_requested' then
+      obs := coalesce(obs, '') || case when after_s = 'pending_coordinator' then 'Corregida y reenviada a Coordinación.' else 'Corregida y reenviada al investigador responsable.' end;
+      log_action := 'resubmit';
+    elsif obs is not null then
+      obs := obs || 'Editada antes de ser revisada.';
+      log_action := 'researcher_changed';
+    else
+      obs := 'El autor la editó antes de que la revisaran.';
+      log_action := 'edited';
+    end if;
 
   elsif act = 'review' then
     -- Revisa quien tiene la propuesta en su bandeja: el investigador responsable o Coordinación.
@@ -381,8 +403,9 @@ begin
     obs := case when decision = 'approved' then research.opt_text(d, 'observations', 65535)
                 else research.req_text(d, 'observations', 65535) end;
     after_s := case decision
-      -- Si el responsable es de Coordinación, su aprobación ya es la final.
-      when 'approved' then case when before_s = 'pending_researcher_review' and u.role <> 'coordinator' then 'pending_coordinator' else 'approved' end
+      -- La aprobación del investigador es la final para propuestas de estudiantes;
+      -- las propuestas propias de un investigador las aprueba Coordinación.
+      when 'approved' then 'approved'
       when 'changes_requested' then 'changes_requested' else 'rejected' end;
     if decision = 'changes_requested' then update research.proposals set returns_to = before_s where id = pid; end if;
     if after_s = 'approved' then new_project := research.proposal_to_project(p, u.id); end if;
@@ -410,6 +433,7 @@ begin
     end if;
     after_s := 'cancelled';
     update research.proposals set status_before_cancel = before_s where id = pid;
+    perform research.change_requests_cleanup();
     log_action := 'cancelled';
 
   elsif act = 'reactivate' then
@@ -479,6 +503,7 @@ begin
       where p.responsible_researcher_id = u.id and a.status = 'in_review' and p.status in ('active', 'changes');
   end if;
   if u.role = 'coordinator' then
+    perform research.change_requests_cleanup();
     select count(*) into n from research.proposals where status = 'pending_coordinator';
     if n > 0 then todo := todo || jsonb_build_object('label', 'Propuestas esperando tu decisión', 'count', n, 'link', 'proposals', 'filter', 'pending_coordinator', 'tone', 'progress'); end if;
     select count(*) into n from research.projects where status = 'closing';

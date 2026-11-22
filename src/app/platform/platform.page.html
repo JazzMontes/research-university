@@ -25,7 +25,7 @@
             </button>
           </div>
           <p class="login-links"><button type="button" class="link-button" (click)="startRecovery()">¿Olvidaste tu contraseña?</button></p>
-          @if (loginInfo) { <p class="ok-box" role="status">{{ loginInfo }}</p> }
+          @if (loginInfo) { <p class="ok-box" role="status" [innerHTML]="fmt(loginInfo)"></p> }
           @if (loginError || auth.sessionMessage) { <p class="error" role="alert">{{ loginError || auth.sessionMessage }}</p> }
           <button class="primary wide" type="submit" [disabled]="loginBusy">{{ loginBusy ? 'Iniciando sesión…' : 'Iniciar sesión →' }}</button>
           <p class="muted">¿No tienes cuenta? Coordinación te la crea y te da una contraseña temporal.</p>
@@ -187,7 +187,7 @@
                 @for (r of dash['change_requests']; track r.id) {
                   <div class="list-row">
                     <div><strong>{{ r.target_title }}</strong>
-                      <small>{{ r.requester_name }} pide cambiar a {{ r.current_name }}{{ r.proposed_name ? ' por ' + r.proposed_name : '' }} · <strong><em>{{ r.reason }}</em></strong></small></div>
+                      <small><span [innerHTML]="fmt(changeRequestText(r))"></span> Motivo: {{ r.reason }}</small></div>
                     <div class="row-actions"><a class="text-button" [routerLink]="['/app', r.link]"><app-icon name="next"></app-icon>Ver</a>
                       <button type="button" class="secondary small" (click)="reviewChangeRequest(r)"><app-icon name="review"></app-icon>Resolver</button></div>
                   </div>
@@ -298,7 +298,7 @@
             <button type="button" class="primary" (click)="newProposal()"><app-icon name="plus"></app-icon>Nueva propuesta</button></div>
           <div class="chips">@for (f of proposalFilterList; track f.value) { <button type="button" [class.active]="filter === f.value" (click)="setProposalFilter(f.value)">{{ f.label }}</button> }</div>
           <form class="filters" (ngSubmit)="searchProposals()">
-            <span class="search-icon"><app-icon name="search"></app-icon></span><input name="search" type="search" aria-label="Buscar por título" [(ngModel)]="search" (ngModelChange)="liveSearchProposals()" placeholder="Buscar por título (se actualiza mientras escribes)">
+            <span class="search-icon"><app-icon name="search"></app-icon></span><input name="search" type="search" aria-label="Buscar por título" [(ngModel)]="search" (ngModelChange)="liveSearchProposals()" placeholder="Buscar por título…">
             <span>{{ proposalTotal }} resultados</span>
           </form>
           <div class="record-cards scroll-box">
@@ -329,7 +329,7 @@
 
           @if (proposal['change_request']) {
             <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>Solicitud de cambio de investigador pendiente</strong>
-              <p>{{ proposal['change_request'].requester_name }}: <strong><em>{{ proposal['change_request'].reason }}</em></strong></p>
+              <p [innerHTML]="fmt(changeRequestText(proposal['change_request']))"></p><p>Motivo: {{ proposal['change_request'].reason }}</p>
               @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(proposal['change_request'])"><app-icon name="review"></app-icon>Resolver solicitud</button> }
               @else { <small>Coordinación la revisará pronto.</small> }</div>
           }
@@ -352,12 +352,12 @@
             <div class="actions">
               @if (canReviewProposal) { <button type="button" class="primary" (click)="reviewProposal()"><app-icon name="review"></app-icon>Revisar propuesta</button> }
               @if (isAuthor && proposal['status'] === 'changes_requested') { <button type="button" class="primary" (click)="correctProposal()"><app-icon name="edit"></app-icon>Corregir y reenviar</button> }
+              @if (canEditProposal) { <button type="button" class="secondary" (click)="correctProposal()"><app-icon name="edit"></app-icon>Editar propuesta</button> }
               @if (proposal['project_id']) { <a class="primary-link" [routerLink]="['/app/projects', proposal['project_id']]"><app-icon name="folder"></app-icon>Ir al proyecto</a> }
               @if (proposal['status'] === 'cancelled' && (isAuthor || role === 'coordinator')) { <button type="button" class="secondary" (click)="reactivateProposal()"><app-icon name="refresh"></app-icon>Reactivar</button> }
-              @if (role === 'coordinator' && !['approved','rejected','cancelled'].includes(proposal['status'])) {
+              @if (canChangeProposalResearcher) {
                 <button type="button" class="secondary" (click)="changeProposalResearcher()"><app-icon name="swap"></app-icon>Cambiar investigador</button>
               }
-              @if (canRequestProposalChange) { <button type="button" class="secondary" (click)="requestResearcherChange('proposal')"><app-icon name="swap"></app-icon>Solicitar cambio de investigador</button> }
             </div>
           </section>
 
@@ -422,7 +422,7 @@
 
           @if (project['change_request']) {
             <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>Solicitud de cambio de investigador pendiente</strong>
-              <p>{{ project['change_request'].requester_name }}: <strong><em>{{ project['change_request'].reason }}</em></strong></p>
+              <p [innerHTML]="fmt(changeRequestText(project['change_request']))"></p><p>Motivo: {{ project['change_request'].reason }}</p>
               @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(project['change_request'])"><app-icon name="review"></app-icon>Resolver solicitud</button> }
               @else { <small>Coordinación la revisará pronto.</small> }</div>
           }
@@ -457,7 +457,7 @@
                 }
                 @if (role === 'coordinator' && project['status'] === 'closing') { <button type="button" class="primary" (click)="reviewClosure()"><app-icon name="review"></app-icon>Revisar cierre</button> }
                 @if (isLead || role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport()"><app-icon name="printer"></app-icon>Reporte del proyecto</button> }
-                @if (canRequestProjectChange) { <button type="button" class="secondary" (click)="requestResearcherChange('project')"><app-icon name="swap"></app-icon>Solicitar cambio de investigador</button> }
+                @if (canRequestProjectChange) { <button type="button" class="secondary" (click)="requestResearcherChange()"><app-icon name="swap"></app-icon>Solicitar cambio de investigador</button> }
                 @if (role === 'coordinator' && ['active','changes','closing'].includes(project['status'])) {
                   <button type="button" class="secondary" (click)="changeResearcher()"><app-icon name="swap"></app-icon>Cambiar responsable</button>
                   <button type="button" class="danger-text" (click)="cancelProject()"><app-icon name="ban"></app-icon>Cancelar proyecto</button>
@@ -469,12 +469,16 @@
           } @else if (tab === 'Equipo') {
             <section class="panel tab-panel">
               <div class="panel-head"><h2>Equipo</h2>@if (isLead && projectEditable) { <button type="button" class="primary" (click)="addMember()"><app-icon name="plus"></app-icon>Agregar integrante</button> }</div>
+              @if (isLead && projectEditable) { <p class="muted plan-help">Con <strong><em>Dar permisos</em></strong> un integrante puede ayudarte a gestionar el plan de trabajo: crear actividades e hitos y revisar entregas de los demás.</p> }
+              @if (!isLead && project['i_can_manage']) { <div class="callout tone-done"><strong><app-icon name="key"></app-icon>Tienes permisos de gestión</strong><p>Puedes crear, editar y revisar actividades e hitos en la pestaña Actividades.</p></div> }
               @for (m of activeMembers; track m.user_id) {
                 <div class="list-row">
                   <div><strong>{{ m.name }}</strong><small>{{ m.project_role || roleName(m.role) }} · desde {{ date(m.joined_at) }}
                     @if (+m.pending_activities) { · {{ m.pending_activities }} actividad(es) abierta(s) }</small></div>
+                  @if (+m.can_manage && !isProjectLead(m)) { <span class="badge tone-done" title="Puede crear y revisar actividades e hitos"><app-icon name="key" [size]="13"></app-icon> Gestiona el plan</span> }
                   @if (isLead && projectEditable && !isProjectLead(m)) {
-                    <div class="row-actions"><button type="button" class="text-button" (click)="editMemberRole(m)"><app-icon name="edit"></app-icon>Cambiar rol</button>
+                    <div class="row-actions"><button type="button" class="text-button" (click)="toggleManage(m)"><app-icon name="key"></app-icon>{{ +m.can_manage ? 'Quitar permisos' : 'Dar permisos' }}</button>
+                    <button type="button" class="text-button" (click)="editMemberRole(m)"><app-icon name="edit"></app-icon>Cambiar rol</button>
                     <button type="button" class="text-button danger-text" (click)="removeMember(m)"><app-icon name="user-minus"></app-icon>Retirar</button></div>
                   }
                 </div>
@@ -491,7 +495,7 @@
           } @else if (tab === 'Actividades') {
             <section class="panel tab-panel">
               <div class="panel-head"><h2><app-icon name="tasks"></app-icon>Plan de trabajo</h2>
-                @if (isLead && projectEditable) {
+                @if (canManagePlan && projectEditable) {
                   <div class="row-actions">
                     <button type="button" class="secondary" (click)="milestoneForm()"><app-icon name="flag"></app-icon>Nuevo hito</button>
                     <button type="button" class="primary" (click)="activityForm()"><app-icon name="plus"></app-icon>Nueva actividad</button>
@@ -511,7 +515,7 @@
                         <span class="bar small-bar"><span class="bar-fill" [style.width.%]="milestonePercent(g.milestone)"></span></span>
                       </div>
                       <span class="badge" [class]="'badge tone-' + status('milestone', g.milestone.status).tone">{{ status('milestone', g.milestone.status).label }}</span>
-                      @if (isLead && projectEditable) {
+                      @if (canManagePlan && projectEditable) {
                         <div class="row-actions">
                           <button type="button" class="text-button" (click)="activityForm(undefined, +g.milestone.id)"><app-icon name="plus"></app-icon>Actividad</button>
                           <button type="button" class="text-button" (click)="milestoneForm(g.milestone)"><app-icon name="edit"></app-icon>Editar</button>
@@ -602,9 +606,9 @@
                 <button type="button" class="primary" (click)="submitActivity()"><app-icon name="send"></app-icon>Entregar para revisión</button>
               }
               @if (activityEditable && activityMine && activityOpen) { <button type="button" class="secondary" (click)="addEvidence()"><app-icon name="clip"></app-icon>Adjuntar evidencia</button> }
-              @if (activityEditable && activityLead && activity['status'] === 'in_review') { <button type="button" class="primary" (click)="reviewActivity()"><app-icon name="review"></app-icon>Revisar entrega</button> }
-              @if (activityEditable && activityLead && activity['status'] === 'completed') { <button type="button" class="secondary" (click)="reviewActivity()"><app-icon name="refresh"></app-icon>Reabrir (pedir cambios)</button> }
-              @if (activityEditable && activityLead && activityOpen) {
+              @if (activityEditable && activityCanReview && activity['status'] === 'in_review') { <button type="button" class="primary" (click)="reviewActivity()"><app-icon name="review"></app-icon>Revisar entrega</button> }
+              @if (activityEditable && activityCanReview && activity['status'] === 'completed') { <button type="button" class="secondary" (click)="reviewActivity()"><app-icon name="refresh"></app-icon>Reabrir (pedir cambios)</button> }
+              @if (activityEditable && activityManage && activityOpen) {
                 <button type="button" class="secondary" (click)="activityForm(activity)"><app-icon name="edit"></app-icon>Editar</button>
                 <button type="button" class="danger-text" (click)="cancelActivity()"><app-icon name="ban"></app-icon>Cancelar actividad</button>
               }
@@ -715,7 +719,10 @@
               </div>
               <form class="chat-form" (ngSubmit)="ask()">
                 @if (attachment || attachBusy) {
-                  <div class="attach-row"><span class="file-chip"><app-icon name="clip"></app-icon>{{ attachBusy ? 'Leyendo archivo…' : attachment!.name }}</span>
+                  <div class="attach-row">
+                    @if (attachment?.data && attachment!.mime.startsWith('image/')) { <img class="attach-thumb" [src]="'data:' + attachment!.mime + ';base64,' + attachment!.data" alt="Vista previa"> }
+                    @else if (attachment) { <span class="file-ext small" [style.background]="fileIcon((attachment.name.split('.').pop() || '').toUpperCase())">{{ (attachment.name.split('.').pop() || '').toUpperCase() }}</span> }
+                    <span class="file-chip"><app-icon name="clip"></app-icon>{{ attachBusy ? 'Leyendo archivo…' : attachment!.name }}</span>
                     @if (attachment) { <button type="button" class="icon-button" (click)="attachment = undefined" aria-label="Quitar archivo">×</button> }</div>
                 }
                 <div class="chat-input">
@@ -767,6 +774,22 @@
   }
 
   <!-- ========================= DIÁLOGO ÚNICO ========================= -->
+  @if (credentials && auth.user()) {
+    <div class="modal-backdrop">
+      <section class="modal credentials" role="dialog" aria-modal="true" aria-labelledby="cred-title" (keydown.escape)="closeCredentials()">
+        <header><h2 id="cred-title"><app-icon name="key" [size]="22"></app-icon>{{ credentials.title }}</h2><button type="button" (click)="closeCredentials()" aria-label="Cerrar">×</button></header>
+        <p class="intro">Comparte estos datos con <strong><em>{{ credentials.name }}</em></strong>. Al entrar por primera vez tendrá que crear su propia contraseña.</p>
+        <div class="cred-box">
+          <div><small>Usuario</small><strong>{{ credentials.username }}</strong></div>
+          <div><small>Contraseña temporal</small><strong>{{ credentials.password }}</strong></div>
+        </div>
+        <footer>
+          <button class="secondary" type="button" (click)="closeCredentials()">Cerrar</button>
+          <button class="primary" type="button" (click)="copyCredentials()"><app-icon [name]="credentialsCopied ? 'check' : 'copy'"></app-icon>{{ credentialsCopied ? '¡Copiado!' : 'Copiar usuario y contraseña' }}</button>
+        </footer>
+      </section>
+    </div>
+  }
   @if (dialog && auth.user()) {
     <div class="modal-backdrop">
       <section class="modal" [class.danger]="dialog.danger" role="dialog" aria-modal="true" aria-labelledby="modal-title" (keydown.escape)="closeDialog()">
@@ -796,9 +819,27 @@
                   @for (o of field.options || []; track o.value) { <option [value]="o.value">{{ o.label }}</option> }
                 </select>
               } @else if (field.type === 'textarea') {
-                <textarea [id]="'f_' + field.key" [name]="field.key" rows="4" [(ngModel)]="dialog.values[field.key]" [placeholder]="field.placeholder || ''"></textarea>
+                <textarea #area [id]="'f_' + field.key" [name]="field.key" rows="4" [(ngModel)]="dialog.values[field.key]" [placeholder]="field.placeholder || ''"
+                  (input)="bulletize(field, area)" (keydown.enter)="bulletEnter(field, $any($event))"></textarea>
+                @if (field.key === 'objectives') { <small class="hint">Escribe <strong>*</strong> y un espacio al inicio de la línea para hacer una viñeta (•).</small> }
               } @else if (field.type === 'file') {
-                <input [id]="'f_' + field.key" type="file" accept=".pdf,.doc,.docx,.xlsx,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg" (change)="chooseFile($event)">
+                <input #fileInput [id]="'f_' + field.key" type="file" accept=".pdf,.doc,.docx,.xlsx,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg" (change)="chooseFile($event)"
+                  [class.has-file]="!!filePreview">
+                @if (filePreview) {
+                  <div class="file-preview">
+                    @switch (filePreview.kind) {
+                      @case ('image') { <img [src]="filePreview.src" [alt]="'Vista previa de ' + filePreview.name"> }
+                      @case ('pdf') { <iframe [src]="filePreview.url" [title]="'Vista previa de ' + filePreview.name"></iframe> }
+                      @case ('text') { <pre>{{ filePreview.text }}</pre> }
+                      @default { <div class="file-card-big"><span class="file-ext" [style.background]="fileIcon(filePreview.ext)">{{ filePreview.ext }}</span><small>Sin vista previa para este tipo de archivo</small></div> }
+                    }
+                    <div class="file-preview-foot">
+                      <span class="file-ext small" [style.background]="fileIcon(filePreview.ext)">{{ filePreview.ext }}</span>
+                      <div><strong>{{ filePreview.name }}</strong><small>{{ filePreview.size }}</small></div>
+                      <button type="button" class="text-button danger-text" (click)="clearDialogFile(fileInput)"><app-icon name="trash"></app-icon>Quitar</button>
+                    </div>
+                  </div>
+                }
               } @else if (field.type === 'password') {
                 <div class="password-box">
                   <input [id]="'f_' + field.key" [name]="field.key" [type]="shown[field.key] ? 'text' : 'password'" autocomplete="new-password"

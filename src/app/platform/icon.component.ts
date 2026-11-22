@@ -37,6 +37,7 @@ import { Component, Input } from '@angular/core';
       @case ('user-minus') { <svg:circle cx="9" cy="8" r="4"/><svg:path d="M2 21a7 7 0 0 1 14 0"/><svg:path d="M16 11h6"/> }
       @case ('swap') { <svg:path d="M7 4 3 8l4 4"/><svg:path d="M3 8h14"/><svg:path d="M17 20l4-4-4-4"/><svg:path d="M21 16H7"/> }
       @case ('key') { <svg:circle cx="8" cy="15" r="4"/><svg:path d="M11 12l9-9M17 6l3 3M15 8l2 2"/> }
+      @case ('copy') { <svg:rect x="9" y="9" width="12" height="12" rx="2"/><svg:path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/> }
       @case ('lock') { <svg:rect x="5" y="11" width="14" height="10" rx="2"/><svg:path d="M8 11V7a4 4 0 0 1 8 0v4"/> }
       @case ('flag') { <svg:path d="M5 21V4"/><svg:path d="M5 4h12l-2.5 4L17 12H5"/> }
       @case ('tasks') { <svg:path d="M3 6l2 2 3-3M3 13l2 2 3-3"/><svg:path d="M11 7h10M11 14h10M4 20h17"/> }

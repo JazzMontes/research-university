@@ -8,6 +8,7 @@
 import { ChangeDetectorRef, Component, ElementRef, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { IonicModule } from '@ionic/angular';
 import {
@@ -162,7 +163,7 @@ export class PlatformPage implements OnInit {
   readonly projectFilters = PROJECT_FILTERS;
   readonly todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
-  constructor(private route: ActivatedRoute, private router: Router, public auth: AuthService,
+  constructor(private route: ActivatedRoute, private router: Router, public auth: AuthService, private sanitizer: DomSanitizer,
     private api: ApiService, private backend: BackendService, private changeDetector: ChangeDetectorRef,
     public notifications: NotificationsService) {}
 
@@ -512,11 +513,19 @@ export class PlatformPage implements OnInit {
   get canRequestProjectChange(): boolean {
     return this.isMember && !this.isLead && ['active', 'changes', 'closing'].includes(this.project?.['status']) && !this.project?.['change_request'];
   }
-  get canRequestProposalChange(): boolean {
+  /** Estudiante autor (mientras sea propuesta) o Coordinación cambian al investigador directamente. */
+  get canChangeProposalResearcher(): boolean {
     const p = this.proposal;
-    return !!p && this.isAuthor && Number(p['responsible_researcher_id']) !== this.me &&
-      !['approved', 'rejected', 'cancelled'].includes(p['status']) && !p['change_request'];
+    if (!p) return false;
+    if (this.role === 'coordinator') return !['approved', 'rejected', 'cancelled'].includes(p['status']);
+    return this.isAuthor && this.role === 'student' && ['pending_researcher_review', 'changes_requested'].includes(p['status']);
   }
+  /** El autor puede editar mientras nadie la ha revisado. */
+  get canEditProposal(): boolean {
+    return !!this.proposal && this.isAuthor && ['pending_researcher_review', 'pending_coordinator'].includes(this.proposal['status']);
+  }
+  /** Responsable o integrante con permiso: crea y revisa actividades e hitos. */
+  get canManagePlan(): boolean { return this.isLead || !!this.project?.['i_can_manage']; }
   get isMember(): boolean {
     return (this.project?.['participants'] || []).some((p: Row) => Number(p['user_id']) === this.me && Number(p['is_active']) === 1);
   }
@@ -554,6 +563,9 @@ export class PlatformPage implements OnInit {
   }
 
   get activityLead(): boolean { return this.canResearch && Number(this.activity?.['lead_id']) === this.me; }
+  get activityManage(): boolean { return this.activityLead || !!this.activity?.['i_can_manage']; }
+  /** Nadie revisa su propia entrega, salvo el investigador responsable. */
+  get activityCanReview(): boolean { return this.activityManage && (this.activityLead || !this.activityMine); }
   get activityMine(): boolean { return Number(this.activity?.['participant_id']) === this.me; }
   get activityEditable(): boolean { return ['active', 'changes'].includes(this.activity?.['project_status']); }
   get activityOpen(): boolean { return ['pending', 'in_review', 'changes'].includes(this.activity?.['status']); }
@@ -585,6 +597,7 @@ export class PlatformPage implements OnInit {
     this.dialog = dialog;
     this.dialogError = '';
     this.dialogFile = undefined;
+    void this.buildPreview(undefined);
     this.shown = {};
     for (const field of dialog.fields) {
       if (dialog.values[field.key] === undefined) dialog.values[field.key] = field.type === 'checks' ? [] : '';
@@ -597,10 +610,74 @@ export class PlatformPage implements OnInit {
     this.dialog!.values[field.key] = checked ? [...list, value] : list.filter(item => item !== value);
   }
   isChecked(field: DialogField, value: string): boolean { return (this.dialog?.values[field.key] || []).includes(value); }
+  /** En Objetivos, «* » al inicio de una línea se vuelve una viñeta «• ». */
+  bulletize(field: DialogField, area: HTMLTextAreaElement): void {
+    if (!['objectives'].includes(field.key) || !this.dialog) return;
+    const before = area.value;
+    const after = before.replace(/(^|\n)([ \t]*)\* /g, '$1$2• ');
+    if (after === before) return;
+    const cursor = area.selectionStart + (after.length - before.length);
+    this.dialog.values[field.key] = after;
+    area.value = after;
+    area.setSelectionRange(cursor, cursor);
+  }
+  /** Enter después de una viñeta continúa la lista. */
+  bulletEnter(field: DialogField, event: KeyboardEvent): void {
+    if (field.key !== 'objectives' || event.shiftKey || !this.dialog) return;
+    const area = event.target as HTMLTextAreaElement;
+    const start = area.selectionStart;
+    const line = area.value.slice(0, start).split('\n').pop() || '';
+    const match = /^([ \t]*)• (.*)$/.exec(line);
+    if (!match) return;
+    event.preventDefault();
+    let value: string; let cursor: number;
+    if (!match[2].trim()) {
+      // Viñeta vacía + Enter: termina la lista.
+      value = area.value.slice(0, start - line.length) + area.value.slice(start); cursor = start - line.length;
+    } else {
+      const insert = '\n' + match[1] + '• ';
+      value = area.value.slice(0, start) + insert + area.value.slice(area.selectionEnd); cursor = start + insert.length;
+    }
+    this.dialog.values[field.key] = value;
+    area.value = value;
+    area.setSelectionRange(cursor, cursor);
+  }
+
+  /** Vista previa del archivo elegido: imagen, PDF, texto o tarjeta con el tipo. */
+  filePreview?: { name: string; size: string; ext: string; kind: 'image' | 'pdf' | 'text' | 'other'; url?: SafeResourceUrl; src?: string; text?: string };
+  private previewUrl?: string;
+  private async buildPreview(file?: File): Promise<void> {
+    if (this.previewUrl) { URL.revokeObjectURL(this.previewUrl); this.previewUrl = undefined; }
+    this.filePreview = undefined;
+    if (!file) return;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const size = file.size >= 1048576 ? `${(file.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+    const preview: NonNullable<PlatformPage['filePreview']> = { name: file.name, size, ext: ext.toUpperCase() || 'ARCHIVO', kind: 'other' };
+    if (/^image\//.test(file.type) || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
+      this.previewUrl = URL.createObjectURL(file); preview.kind = 'image'; preview.src = this.previewUrl;
+    } else if (ext === 'pdf') {
+      this.previewUrl = URL.createObjectURL(file); preview.kind = 'pdf';
+      preview.url = this.sanitizer.bypassSecurityTrustResourceUrl(this.previewUrl + '#toolbar=0&navpanes=0&view=FitH');
+    } else if (['txt', 'md', 'csv'].includes(ext)) {
+      preview.kind = 'text'; preview.text = (await file.slice(0, 4000).text()).slice(0, 1500);
+    } else if (['docx', 'xlsx'].includes(ext)) {
+      try { const text = await extractOfficeText(file); if (text.trim()) { preview.kind = 'text'; preview.text = text.slice(0, 1500); } } catch { /* solo tarjeta */ }
+    }
+    this.filePreview = preview;
+    this.changeDetector.markForCheck();
+  }
+  fileIcon(ext: string): string {
+    return ({ PDF: '#c0392b', DOC: '#2b5797', DOCX: '#2b5797', XLS: '#1e7145', XLSX: '#1e7145', CSV: '#1e7145', PPT: '#d24726', PPTX: '#d24726' } as Record<string, string>)[ext] || '#5b6b68';
+  }
+  clearDialogFile(input: HTMLInputElement): void {
+    input.value = ''; this.dialogFile = undefined; this.dialogError = ''; void this.buildPreview(undefined);
+  }
+
   chooseFile(event: Event): void {
     const file = (event.target as HTMLInputElement).files?.[0];
     this.dialogFile = file;
     this.dialogError = '';
+    void this.buildPreview(file);
     if (file && file.size > this.backend.maxUploadBytes) {
       this.dialogError = `El archivo pesa ${(file.size / 1048576).toFixed(1)} MB; el máximo es ${this.backend.maxUploadBytes / 1048576} MB.`;
     }
@@ -685,7 +762,7 @@ export class PlatformPage implements OnInit {
       fields.push({ key: 'file', label: 'Archivo (opcional)', type: 'file', hint: 'PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB.' });
       this.openDialog({
         title: 'Nueva propuesta', confirmLabel: this.role === 'coordinator' ? 'Crear proyecto' : 'Enviar propuesta', fields, values: {},
-        intro: this.role === 'student' ? 'Se enviará al investigador que elijas; después la revisa Coordinación.'
+        intro: this.role === 'student' ? 'Se enviará al investigador que elijas. Si la aprueba, se convierte en proyecto. Mientras no la revise, puedes editarla.'
           : this.role === 'researcher' ? 'Como investigador, tu propuesta pasa directo a Coordinación.'
           : 'Como Coordinación, tu propuesta se aprueba en ese momento y se convierte en proyecto contigo como responsable.',
         submit: async (values, file) => {
@@ -706,7 +783,8 @@ export class PlatformPage implements OnInit {
       const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(p['responsible_researcher_id']));
       this.openDialog({
         title: 'Cambiar investigador responsable', confirmLabel: 'Cambiar', values: {},
-        intro: p['status'] === 'pending_researcher_review' ? 'La propuesta pasará a la bandeja del nuevo investigador para que la revise.' : undefined,
+        intro: `Ahora el responsable es «${p['researcher_name']}». ` + (p['status'] === 'pending_researcher_review'
+          ? 'La propuesta pasará a la bandeja del nuevo investigador para que la revise.' : 'El nuevo investigador revisará la propuesta cuando la reenvíes.'),
         fields: [
           { key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', required: true, options },
           { key: 'reason', label: 'Motivo (opcional)', type: 'textarea' },
@@ -716,47 +794,73 @@ export class PlatformPage implements OnInit {
     });
   }
 
-  /** Estudiante o integrante: pide a Coordinación otro investigador responsable. */
-  requestResearcherChange(target: 'project' | 'proposal'): void {
-    const item = target === 'project' ? this.project! : this.proposal!;
+  /** Integrante de un proyecto en curso: pide a Coordinación otro investigador responsable (lo elige él). */
+  requestResearcherChange(): void {
+    const item = this.project!;
     void this.withOptions(async () => {
       const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(item['responsible_researcher_id']));
       this.openDialog({
         title: 'Solicitar cambio de investigador', confirmLabel: 'Enviar solicitud', values: {},
-        intro: `Coordinación revisará tu solicitud. Mientras tanto, ${item['researcher_name']} sigue como responsable.`,
+        intro: `Coordinación aprobará o rechazará el cambio. Mientras tanto, «${item['researcher_name']}» sigue como responsable.`,
         fields: [
+          { key: 'proposed_researcher_id', label: 'Nuevo investigador responsable', type: 'select', required: true, options },
           { key: 'reason', label: '¿Por qué quieres cambiar de investigador?', type: 'textarea', required: true },
-          { key: 'proposed_researcher_id', label: 'Investigador que propones (opcional)', type: 'select', options },
         ],
         submit: async values => {
-          const body: Row = { reason: values['reason'], [target === 'project' ? 'project_id' : 'proposal_id']: item['id'] };
-          if (values['proposed_researcher_id']) body['proposed_researcher_id'] = values['proposed_researcher_id'];
-          await this.post('changes/request.php', body);
+          await this.post('changes/request.php', { project_id: item['id'], reason: values['reason'], proposed_researcher_id: values['proposed_researcher_id'] });
           return 'Solicitud enviada a Coordinación.';
         },
       });
     });
   }
 
-  /** Coordinación resuelve una solicitud de cambio de investigador. */
+  /** Texto de la solicitud: «quiere cambiar a X por Y». */
+  changeRequestText(r: Row): string {
+    return `${r['requester_name']} quiere cambiar a «${r['current_name']}» por «${r['proposed_name'] || 'otro investigador'}» como responsable.`;
+  }
+  private changeRequestClosed(r: Row): string {
+    const st = r['target_status'];
+    if (st === 'cancelled') return r['target_kind'] === 'project' ? 'El proyecto fue cancelado.' : 'La propuesta fue cancelada.';
+    if (st === 'finalized') return 'El proyecto ya se completó.';
+    if (st === 'rejected') return 'La propuesta fue rechazada.';
+    return '';
+  }
+
+  /** Coordinación aprueba o rechaza: el nuevo investigador ya lo eligió quien pidió el cambio. */
   reviewChangeRequest(request: Row): void {
-    void this.withOptions(async () => {
-      const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(request['current_researcher_id']));
+    const closed = this.changeRequestClosed(request);
+    if (closed) {
       this.openDialog({
-        title: 'Solicitud de cambio de investigador', confirmLabel: 'Guardar decisión',
-        values: { researcher_id: request['proposed_researcher_id'] ? String(request['proposed_researcher_id']) : '' },
-        intro: `${request['requester_name']} pide cambiar a ${request['current_name']} en «${request['target_title']}». Motivo: ${request['reason']}`,
+        title: 'Esta solicitud ya no aplica', confirmLabel: 'Entendido', values: {}, fields: [],
+        intro: `${closed} No hay nada que cambiar; la solicitud se cerró sola.`,
+        submit: async () => 'Solicitud cerrada.',
+      });
+      return;
+    }
+    const legacy = !request['proposed_researcher_id'];
+    void this.withOptions(async () => {
+      const options = legacy ? (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(request['current_researcher_id'])) : [];
+      this.openDialog({
+        title: 'Solicitud de cambio de investigador', confirmLabel: 'Guardar decisión', values: {},
+        intro: `«${request['target_title']}»: ${this.changeRequestText(request)} Motivo: ${request['reason']}`,
         fields: [
           { key: 'decision', label: 'Decisión', type: 'choice', required: true, options: [
-            { value: 'approved', label: 'Aprobar y asignar al nuevo investigador' }, { value: 'rejected', label: 'Rechazar' }] },
-          { key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', options,
-            requiredWhen: v => v['decision'] === 'approved' },
+            { value: 'approved', label: legacy ? 'Aprobar el cambio' : `Aprobar: «${request['proposed_name']}» será el nuevo responsable` },
+            { value: 'rejected', label: `Rechazar: «${request['current_name']}» sigue como responsable` }] },
+          ...(legacy ? [{ key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select' as const, options,
+            requiredWhen: (v: Row) => v['decision'] === 'approved', hint: 'Esta solicitud es anterior y no indica a quién se quiere.' }] : []),
           { key: 'note', label: 'Nota para quien lo pidió', type: 'textarea', requiredWhen: v => v['decision'] === 'rejected' },
         ],
         submit: async values => {
           const body: Row = { request_id: request['id'], decision: values['decision'], note: values['note'] };
-          if (values['decision'] === 'approved') body['researcher_id'] = values['researcher_id'];
-          await this.post('changes/review.php', body);
+          if (legacy && values['decision'] === 'approved') body['researcher_id'] = values['researcher_id'];
+          try { await this.post('changes/review.php', body); }
+          catch (error) {
+            const msg = this.message(error, '');
+            // Si ya no aplica (por ejemplo, se canceló), se cierra el aviso en lugar de dejar la ventana abierta.
+            if (/ya no aplica|ya se resolvió/i.test(msg)) return msg;
+            throw error;
+          }
           return values['decision'] === 'approved' ? 'Investigador cambiado.' : 'Solicitud rechazada.';
         },
       });
@@ -773,11 +877,10 @@ export class PlatformPage implements OnInit {
     const byCoordination = p['status'] === 'pending_coordinator';
     this.openDialog({
       title: 'Revisar propuesta', confirmLabel: 'Guardar decisión', values: {},
-      intro: byCoordination ? 'Si apruebas, el proyecto se crea en ese momento con el investigador responsable y el autor en el equipo.'
-        : 'Si apruebas, la propuesta pasa a Coordinación para la decisión final.',
+      intro: 'Si apruebas, el proyecto se crea en ese momento con ' + (byCoordination ? 'el investigador como responsable.' : 'el autor en el equipo y tú como responsable.'),
       fields: [
         { key: 'decision', label: 'Decisión', type: 'choice', required: true, options: [
-          { value: 'approved', label: byCoordination ? 'Aprobar y crear el proyecto' : 'Aprobar y enviar a Coordinación' },
+          { value: 'approved', label: 'Aprobar y crear el proyecto' },
           { value: 'changes_requested', label: 'Solicitar cambios al autor' },
           { value: 'rejected', label: 'Rechazar (definitivo)' },
         ] },
@@ -788,7 +891,7 @@ export class PlatformPage implements OnInit {
       submit: async values => {
         const result = await this.post('proposals/review.php', { proposal_id: p['id'], ...values });
         if (result['project_id']) { void this.router.navigate(['/app/projects', result['project_id']]); return 'Propuesta aprobada: el proyecto ya está creado.'; }
-        return values['decision'] === 'rejected' ? 'Propuesta rechazada.' : values['decision'] === 'approved' ? 'Propuesta enviada a Coordinación.' : 'Se pidieron cambios al autor.';
+        return values['decision'] === 'rejected' ? 'Propuesta rechazada.' : 'Se pidieron cambios al autor.';
       },
     });
   }
@@ -801,23 +904,25 @@ export class PlatformPage implements OnInit {
         { key: 'description', label: 'Descripción', type: 'textarea', required: true },
         { key: 'objectives', label: 'Objetivos', type: 'textarea', required: true },
       ];
+      const editing = p['status'] !== 'changes_requested';
       if (this.role === 'student') {
         fields.push({ key: 'responsible_researcher_id', label: 'Investigador responsable', type: 'select', required: true,
           options: await this.options('catalogs/researchers.php', {}),
-          hint: 'Si lo cambias, la propuesta vuelve a revisarse desde el nuevo investigador.' });
+          hint: 'Si lo cambias, la propuesta pasa a revisión del nuevo investigador.' });
       }
       fields.push({ key: 'file', label: p['file'] ? 'Reemplazar archivo (opcional)' : 'Archivo (opcional)', type: 'file',
         hint: p['file'] ? `Actual: ${p['file']['filename']}. Si subes otro, queda como nueva versión.` : 'PDF, Word, Excel, imagen o texto. Máximo 5 MB.' });
       this.openDialog({
-        title: 'Corregir y reenviar', confirmLabel: 'Guardar y reenviar', fields,
-        intro: p['returns_to'] === 'pending_coordinator' ? 'Al guardar, regresa a Coordinación.' : 'Al guardar, regresa al investigador responsable.',
+        title: editing ? 'Editar propuesta' : 'Corregir y reenviar', confirmLabel: editing ? 'Guardar cambios' : 'Guardar y reenviar', fields,
+        intro: editing ? 'Todavía nadie la revisa, así que puedes corregirla. Quien la revise verá la versión nueva.'
+          : p['returns_to'] === 'pending_coordinator' ? 'Al guardar, regresa a Coordinación.' : 'Al guardar, regresa al investigador responsable.',
         values: { title: p['title'], description: p['description'], objectives: p['objectives'],
           responsible_researcher_id: String(p['responsible_researcher_id']) },
         submit: async (values, file) => {
           const body: Row = { proposal_id: p['id'], ...values, ...(await this.fileBody(file)) };
           delete body['file'];
           await this.post('proposals/update.php', body);
-          return 'Correcciones enviadas.';
+          return editing ? 'Propuesta actualizada.' : 'Correcciones enviadas.';
         },
       });
     });
@@ -850,7 +955,7 @@ export class PlatformPage implements OnInit {
 
   proposalEvent(action: string): string {
     return ({
-      created: 'Propuesta registrada', resubmit: 'Corregida y reenviada', researcher_changed: 'Cambio de investigador responsable', review_approved: 'Aprobada',
+      created: 'Propuesta registrada', resubmit: 'Corregida y reenviada', edited: 'Editada por el autor', researcher_changed: 'Cambio de investigador responsable', review_approved: 'Aprobada',
       review_changes_requested: 'Cambios solicitados', review_rejected: 'Rechazada', cancelled: 'Cancelada', reactivated: 'Reactivada',
       // Historial anterior a la versión 3:
       update: 'Correcciones guardadas', assign: 'Evaluador asignado', archived: 'Archivada', unarchived: 'Desarchivada',
@@ -979,6 +1084,20 @@ export class PlatformPage implements OnInit {
         ],
         submit: async values => { await this.post('participants/add.php', { project_id: p['id'], ...values }); return 'Integrante agregado.'; },
       });
+    });
+  }
+
+  toggleManage(member: Row): void {
+    const grant = !Number(member['can_manage']);
+    this.openDialog({
+      title: grant ? `Dar permisos a ${member['name']}` : `Quitar permisos a ${member['name']}`,
+      confirmLabel: grant ? 'Dar permisos' : 'Quitar permisos', values: {}, fields: [],
+      intro: grant ? `«${member['name']}» podrá crear, editar y cancelar actividades e hitos, y revisar las entregas de los demás (no las suyas). Equipo, cierre y datos del proyecto siguen siendo solo tuyos.`
+        : `«${member['name']}» ya no podrá gestionar el plan de trabajo; sus actividades no cambian.`,
+      submit: async () => {
+        await this.post('participants/permissions.php', { project_id: this.project!['id'], user_id: member['user_id'], can_manage: grant });
+        return grant ? 'Permisos otorgados.' : 'Permisos retirados.';
+      },
     });
   }
 
@@ -1232,12 +1351,42 @@ export class PlatformPage implements OnInit {
         { key: 'name', label: 'Nombre completo', type: 'text', required: true },
         { key: 'username', label: 'Usuario', type: 'text', required: true, hint: 'Sin espacios: letras, números, punto o guion.' },
         { key: 'email', label: 'Correo (opcional)', type: 'email' },
-        { key: 'password', label: 'Contraseña temporal', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número. La persona la cambiará al entrar por primera vez.' },
         { key: 'role', label: 'Rol', type: 'choice', required: true, options: this.roleOptions() },
       ],
-      submit: async values => { await this.post('users/create.php', values); return `Cuenta creada. Comparte el usuario «${values['username']}» y su contraseña temporal; al entrar tendrá que crear la suya.`; },
+      intro: 'La contraseña temporal se crea sola. Al terminar podrás copiar el usuario y la contraseña para compartirlos.',
+      submit: async values => {
+        const password = this.tempPassword(values['username']);
+        await this.post('users/create.php', { ...values, password });
+        this.credentials = { title: 'Cuenta creada', name: values['name'], username: String(values['username']).trim(), password };
+        return 'Cuenta creada.';
+      },
     });
   }
+
+  /** Contraseña temporal fácil de dictar: Usuario + números (cumple mayúscula, minúscula y número). */
+  tempPassword(username: unknown): string {
+    const letters = String(username || '').normalize('NFD').replace(/[^A-Za-z]/g, '').toLowerCase().slice(0, 12) || 'usuario';
+    let base = letters[0].toUpperCase() + letters.slice(1);
+    if (base.length < 2) base += 'a';
+    const digits = Math.max(3, 8 - base.length);
+    const random = new Uint32Array(1); crypto.getRandomValues(random);
+    return base + String(random[0] % 10 ** digits).padStart(digits, '0');
+  }
+  credentials?: { title: string; name: string; username: string; password: string };
+  credentialsCopied = false;
+  async copyCredentials(): Promise<void> {
+    const c = this.credentials;
+    if (!c) return;
+    const text = `Hola ${c.name}, estos son tus datos para entrar a Research University:\nUsuario: ${c.username}\nContraseña temporal: ${c.password}\nAl entrar por primera vez te pedirá crear tu propia contraseña.`;
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const area = document.createElement('textarea'); area.value = text; document.body.appendChild(area); area.select();
+      document.execCommand('copy'); area.remove();
+    }
+    this.credentialsCopied = true;
+    this.changeDetector.markForCheck();
+  }
+  closeCredentials(): void { this.credentials = undefined; this.credentialsCopied = false; }
 
   editUser(user: Row): void {
     const self = Number(user['id']) === this.me;
@@ -1278,9 +1427,14 @@ export class PlatformPage implements OnInit {
   resetPassword(user: Row): void {
     this.openDialog({
       title: `Contraseña temporal para ${user['name']}`, confirmLabel: 'Asignar contraseña temporal', values: {},
-      intro: 'Es una contraseña temporal: sus sesiones se cierran y al entrar tendrá que crear la suya. Si la persona tiene correo registrado, también puede recuperarla sola desde «¿Olvidaste tu contraseña?».',
-      fields: [{ key: 'password', label: 'Contraseña temporal', type: 'password', required: true, hint: 'Mínimo 8 caracteres, con mayúscula, minúscula y número.' }],
-      submit: async values => { await this.post('users/reset-password.php', { user_id: user['id'], ...values }); return 'Contraseña actualizada.'; },
+      intro: 'Se crea una contraseña temporal nueva: sus sesiones se cierran y al entrar tendrá que crear la suya. Si la persona tiene correo registrado, también puede recuperarla sola desde «¿Olvidaste tu contraseña?».',
+      fields: [],
+      submit: async () => {
+        const password = this.tempPassword(user['username']);
+        await this.post('users/reset-password.php', { user_id: user['id'], password });
+        this.credentials = { title: 'Nueva contraseña temporal', name: user['name'], username: user['username'], password };
+        return 'Contraseña temporal asignada.';
+      },
     });
   }
 
@@ -1293,7 +1447,7 @@ export class PlatformPage implements OnInit {
       'project:created_from_proposal': 'Proyecto creado desde la propuesta', 'project:configured': 'Datos del proyecto actualizados',
       'project:change-researcher': 'Cambio de investigador responsable', 'project:cancelled': 'Proyecto cancelado',
       'project:reopened': 'Proyecto reabierto', 'participant:add': 'Integrante agregado', 'participant:update': 'Rol de integrante actualizado',
-      'participant:remove': 'Integrante retirado', 'activity:create': 'Actividad creada', 'activity:update': 'Actividad editada',
+      'participant:remove': 'Integrante retirado', 'participant:permissions': 'Permisos del plan de trabajo', 'activity:create': 'Actividad creada', 'activity:update': 'Actividad editada',
       'activity:reassign': 'Actividad reasignada', 'activity:submit': 'Actividad entregada', 'activity:review': 'Entrega revisada',
       'activity:cancel': 'Actividad cancelada', 'activity:start': 'Actividad iniciada', 'milestone:create': 'Hito creado',
       'milestone:update': 'Hito editado', 'milestone:delete': 'Hito eliminado', 'milestone:achieve': 'Hito alcanzado',
@@ -1308,7 +1462,8 @@ export class PlatformPage implements OnInit {
     const input: Row = data['input'] || {};
     const parts = [data['user'], data['title'], data['description'], input['description'], data['reason'] && `Motivo: ${data['reason']}`,
       input['reason'] && `Motivo: ${input['reason']}`, input['decision'] && (input['decision'] === 'approved' ? 'Aceptada' : 'Cambios pedidos'),
-      input['observations'], data['before'] && typeof data['before'] === 'string' && `${data['before']} → ${data['after']}`];
+      input['observations'], data['before'] && typeof data['before'] === 'string' && `${data['before']} → ${data['after']}`,
+      data['can_manage'] === true && 'Puede gestionar el plan de trabajo', data['can_manage'] === false && 'Ya no gestiona el plan de trabajo'];
     return parts.filter(Boolean).join(' · ');
   }
 
@@ -1698,9 +1853,9 @@ export class PlatformPage implements OnInit {
         { identifier: this.recoverId.trim(), code: this.recoverCode.replace(/\s/g, ''), password: this.recoverPassword }, 15000);
       if (result.status >= 300) throw new Error(result.body?.['message'] || 'No se pudo cambiar la contraseña.');
       this.loginMode = 'login';
-      this.username = '';
+      this.username = result.body?.['username'] || '';
       this.password = '';
-      this.loginInfo = 'Contraseña actualizada. Ya puedes iniciar sesión.';
+      this.loginInfo = this.username ? `Contraseña actualizada. Tu usuario es «${this.username}»; ya puedes iniciar sesión.` : 'Contraseña actualizada. Ya puedes iniciar sesión.';
     } catch (error) {
       this.loginError = this.message(error, 'No se pudo cambiar la contraseña.');
     } finally {

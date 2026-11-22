@@ -89,22 +89,24 @@ const MODE_TEXT: Record<string, string> = {
 // Cómo funciona URPMP (versión 3). Así el asistente resuelve dudas de uso de la plataforma.
 const PLATFORM_GUIDE = `
 - Roles: Estudiante, Investigador y Coordinación (no existe el rol de evaluador).
-- Propuestas: el estudiante la registra y elige a su investigador responsable → el investigador la revisa → Coordinación decide. Si la registra un investigador, va directo a Coordinación. Quien revisa puede Aprobar, Solicitar cambios o Rechazar (pedir cambios o rechazar exige observaciones). Cuando Coordinación aprueba, el proyecto se crea solo con el investigador y el autor en el equipo.
+- Propuestas: el estudiante la registra y elige a su investigador responsable → el investigador la revisa y su aprobación es la final (no pasa por Coordinación). Si la registra un investigador, la aprueba Coordinación. Si la registra Coordinación, se aprueba sola. Quien revisa puede Aprobar, Solicitar cambios o Rechazar (pedir cambios o rechazar exige observaciones). Al aprobarse, el proyecto se crea solo con el investigador y el autor en el equipo.
+- Mientras nadie la ha revisado, el autor puede usar "Editar propuesta" para corregir algo; en ese momento también puede cambiar de investigador.
 - Cambios solicitados: el autor abre la propuesta → "Corregir y reenviar"; regresa a quien pidió los cambios. El estudiante puede cambiar ahí de investigador si se equivocó (el nuevo la revisa desde el inicio).
 - Cancelar propuesta: el autor o Coordinación, con motivo. "Reactivar" la regresa al punto donde estaba.
-- Proyecto: todo se hace desde su detalle (pestañas Resumen, Equipo, Actividades, Hitos, Documentos, Historial). Estados: En proceso (amarillo), En cambios (azul), Cierre solicitado (amarillo), Completado (verde), Cancelado (rojo).
+- Proyecto: todo se hace desde su detalle (pestañas Resumen, Equipo, Actividades —plan de trabajo con hitos y actividades—, Documentos, Historial). Estados: En proceso (amarillo), En cambios (azul), Cierre solicitado (amarillo), Completado (verde), Cancelado (rojo).
 - Cierre: el investigador responsable usa "Solicitar cierre" (no se permite con actividades sin terminar) → Coordinación aprueba (Completado) o pide cambios (En cambios; se atiende y se vuelve a solicitar).
 - Cancelar proyecto o reabrirlo (si se cerró o canceló por error): solo Coordinación, desde Resumen, con motivo. Cambiar al investigador responsable: solo Coordinación ("Cambiar responsable").
 - Equipo: el investigador responsable agrega integrantes, cambia su rol o los retira ("Retirar"); las actividades abiertas de quien se retira pasan a otra persona (por defecto al responsable). Se puede "Reincorporar". Al responsable no se le puede retirar.
-- Actividades: el responsable del proyecto las crea y edita. La persona asignada adjunta evidencias y usa "Entregar para revisión"; el responsable acepta (Completada) o pide cambios. Si aceptó por error usa "Reabrir (pedir cambios)". Una actividad creada por error se cancela. Quien adjuntó una evidencia equivocada la puede quitar mientras no se acepte.
+- Permisos: en Equipo, el investigador responsable puede usar "Dar permisos" con un integrante (por ejemplo un estudiante) para que le ayude a gestionar el plan de trabajo: crear, editar y cancelar actividades e hitos, y revisar entregas de los demás (no las suyas). Se quitan con "Quitar permisos".
+- Actividades: el responsable del proyecto (o quien tenga permisos) las crea y edita; se puede adjuntar material de apoyo opcional. La persona asignada adjunta evidencias y usa "Entregar para revisión"; el responsable acepta (Completada) o pide cambios. Si aceptó por error usa "Reabrir (pedir cambios)". Una actividad creada por error se cancela. Quien adjuntó una evidencia equivocada la puede quitar mientras no se acepte.
 - Hitos: se marcan como alcanzados solos cuando todas sus actividades están completadas.
 - Documentos: cualquier integrante sube documentos y nuevas versiones; solo quien lo subió o el responsable lo elimina; el responsable puede dejarlo "Solo investigadores". Máximo 5 MB por archivo.
-- Usuarios y contraseñas: solo Coordinación crea cuentas, cambia roles, desactiva cuentas y restablece contraseñas (las cuentas no se borran, se desactivan).
+- Usuarios y contraseñas: solo Coordinación crea cuentas, cambia roles, desactiva cuentas y restablece contraseñas. La contraseña temporal se crea sola (por ejemplo "Ana4821") y se puede copiar junto con el usuario para compartirla.
 - Coordinación también puede ser investigadora: si registra una propuesta, debe escribir una justificación y se convierte en proyecto en ese momento, con ella como responsable. Solo administra los proyectos donde es responsable o integrante; en los demás solo supervisa (cierres, cancelar, reabrir, cambiar responsable).
 - Al crear o corregir una propuesta se puede adjuntar un archivo (opcional); al aprobarse pasa a los documentos del proyecto.
-- Cambio de investigador: el estudiante (o integrante) usa "Solicitar cambio de investigador" en su propuesta o proyecto y explica el motivo; Coordinación la resuelve desde Inicio o desde la propuesta/proyecto. Coordinación también puede cambiarlo directamente ("Cambiar investigador").
+- Cambio de investigador: mientras sea propuesta, el estudiante autor lo cambia él mismo con "Cambiar investigador" (sin pasar por Coordinación). Cuando ya es proyecto, el integrante usa "Solicitar cambio de investigador", elige al nuevo investigador y explica el motivo; Coordinación solo aprueba o rechaza. Si el proyecto se cancela, la solicitud se cierra sola. Coordinación también puede cambiarlo directamente.
 - Usuarios: Coordinación puede eliminar una cuenta definitivamente (pide confirmación escribiendo ELIMINAR); si tenía historial, queda como «Usuario eliminado».
-- Mi perfil: foto, nombre, correo y cambio de contraseña. La contraseña que da Coordinación es temporal y se cambia al primer inicio. "¿Olvidaste tu contraseña?" envía un código al correo.
+- Mi perfil: foto, nombre, correo y cambio de contraseña. La contraseña que da Coordinación es temporal y se cambia al primer inicio. "¿Olvidaste tu contraseña?" pide el correo registrado y envía un código junto con el nombre de usuario; si el correo no está registrado, lo avisa.
 - Notificaciones: la campanita junto al nombre avisa de revisiones, entregas, tareas asignadas, fechas límite, cierres y solicitudes.
 - Inicio muestra gráficas del estado de proyectos, propuestas y actividades, el avance de cada proyecto y lo pendiente de cada persona.`;
 
@@ -439,8 +441,8 @@ async function sendMail(to: string, name: string, subject: string, html: string)
 }
 
 async function passwordReset(identifier: string): Promise<Json> {
-  const generic = "Si la cuenta existe y tiene un correo registrado, te enviamos un código. Revisa tu bandeja de entrada y la carpeta de spam.";
-  if (!identifier.trim()) return { status: 422, body: { message: "Escribe tu usuario o tu correo." } };
+  const email = identifier.trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) return { status: 422, body: { message: "Escribe el correo completo de tu cuenta, por ejemplo nombre@correo.com." } };
   const key = secretKey();
   if (!key) return { status: 503, body: { message: "La recuperación por correo no está configurada. Contacta a Coordinación." } };
   const headers: Record<string, string> = { apikey: key, "Content-Type": "application/json" };
@@ -448,7 +450,7 @@ async function passwordReset(identifier: string): Promise<Json> {
   const base = (Deno.env.get("SUPABASE_URL") || "").replace(/\/$/, "");
   try {
     const res = await fetch(`${base}/rest/v1/rpc/research_password_reset_issue`, {
-      method: "POST", headers, body: JSON.stringify({ identifier: identifier.slice(0, 254) }), signal: AbortSignal.timeout(15000),
+      method: "POST", headers, body: JSON.stringify({ identifier: email.slice(0, 254) }), signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) {
       console.error("reset", res.status, (await res.text()).slice(0, 300));
@@ -456,15 +458,22 @@ async function passwordReset(identifier: string): Promise<Json> {
     }
     const r = await res.json() as Json;
     if (r.result === "wait") return { status: 200, body: { message: "Ya te enviamos un código hace un momento. Revisa tu correo (y spam) o espera un minuto para pedir otro." } };
-    if (r.result !== "ok") return { status: 200, body: { message: generic } };
+    if (r.result === "not_found") {
+      return { status: 404, body: { message: "No hay ninguna cuenta registrada con ese correo. Revisa que esté bien escrito o pide a Coordinación que lo registre en tu cuenta." } };
+    }
+    if (r.result === "inactive") return { status: 403, body: { message: "La cuenta de ese correo está desactivada. Contacta a Coordinación." } };
+    if (r.result !== "ok") return { status: 503, body: { message: "No se pudo generar el código. Inténtalo de nuevo." } };
+    const clean = (v: unknown) => String(v ?? "").replace(/[<>&"]/g, "");
     const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#172b29">
       <h2 style="color:#164b47">Research University</h2>
-      <p>Hola ${String(r.name).replace(/[<>&]/g, "")},</p>
+      <p>Hola ${clean(r.name)},</p>
+      <p>Pediste recuperar el acceso a tu cuenta. Tu <b>usuario</b> es:</p>
+      <p style="font-size:20px;font-weight:bold;background:#f2f6f5;padding:10px;text-align:center;border-radius:8px">${clean(r.username)}</p>
       <p>Tu código para crear una nueva contraseña es:</p>
       <p style="font-size:32px;font-weight:bold;letter-spacing:6px;background:#deefeb;padding:14px;text-align:center;border-radius:8px">${r.code}</p>
       <p>Vence en 15 minutos. Si tú no lo pediste, ignora este correo: tu contraseña no cambia.</p></div>`;
-    await sendMail(String(r.email), String(r.name), "Tu código para recuperar la contraseña", html);
-    return { status: 200, body: { message: generic } };
+    await sendMail(String(r.email), String(r.name), "Tu usuario y código para recuperar la contraseña", html);
+    return { status: 200, body: { message: `Te enviamos un código a ${email}. Revisa tu bandeja de entrada y la carpeta de spam; ahí también viene tu usuario.` } };
   } catch (error) {
     if ((error as Error).message === "not_configured") {
       return { status: 503, body: { message: "El envío de correos no está configurado todavía. Pide a Coordinación que restablezca tu contraseña." } };

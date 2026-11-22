@@ -52,10 +52,12 @@ begin
     return research.ok(jsonb_build_object('item', research.project_json(p) || jsonb_build_object(
       'participants', (select coalesce(jsonb_agg(jsonb_build_object('user_id', t.user_id, 'name', x.name, 'role', x.role,
                          'project_role', t.project_role, 'is_active', t.is_active, 'joined_at', t.joined_at, 'removed_at', t.removed_at,
+                         'can_manage', t.can_manage,
                          'pending_activities', (select count(*) from research.activities a where a.project_id = pid
                                                 and a.participant_id = t.user_id and a.status in ('pending', 'in_review', 'changes')))
                          order by t.is_active desc, x.name), '[]')
                        from research.participants t join research.users x on x.id = t.user_id where t.project_id = pid),
+      'i_can_manage', research.can_manage(p, u),
       'change_request', (select to_jsonb(c) || jsonb_build_object('requester_name', x.name)
                          from research.researcher_change_requests c join research.users x on x.id = c.requested_by
                          where c.project_id = pid and c.status = 'pending' order by c.id desc limit 1),
@@ -96,6 +98,7 @@ begin
       reviewed_by = u.id, reviewed_at = now() where project_id = pid and status = 'pending';
     update research.projects set status = 'cancelled', status_note = v_reason, updated_at = now() where id = pid;
     perform research.event_project(pid, u.id, 'project', pid, 'cancelled', jsonb_build_object('reason', v_reason));
+    perform research.change_requests_cleanup();
     -- La propuesta de origen también queda cancelada (y vuelve a "Aprobada" si se reabre el proyecto).
     if exists (select 1 from research.proposals where id = p.proposal_id and status = 'approved') then
       update research.proposals set status = 'cancelled', status_before_cancel = 'approved', updated_at = now() where id = p.proposal_id;
@@ -147,6 +150,16 @@ begin
     insert into research.participants (project_id, user_id, project_role) values (pid, uid, nullif(v_role, ''))
       on conflict (project_id, user_id) do update set is_active = 1, removed_at = null,
         project_role = coalesce(nullif(excluded.project_role, ''), research.participants.project_role);
+  elsif act = 'permissions' then
+    perform research.participant_valid(pid, uid);
+    if uid = p.responsible_researcher_id then perform research.fail(409, 'El investigador responsable ya tiene todos los permisos.'); end if;
+    update research.participants set can_manage = research.req_bool(d, 'can_manage')::int where project_id = pid and user_id = uid;
+    perform research.notify(array[uid],
+      case when research.req_bool(d, 'can_manage') then 'Ahora puedes gestionar el plan de trabajo de «' || p.title || '»'
+           else 'Ya no gestionas el plan de trabajo de «' || p.title || '»' end,
+      case when research.req_bool(d, 'can_manage') then 'Puedes crear, editar y revisar actividades e hitos del proyecto.' end,
+      'projects/' || pid, case when research.req_bool(d, 'can_manage') then 'done' else 'changes' end);
+    d := d || jsonb_build_object('can_manage', research.req_bool(d, 'can_manage'));
   elsif act = 'update' then
     perform research.participant_valid(pid, uid);
     if uid = p.responsible_researcher_id then perform research.fail(409, 'El rol del investigador responsable no se cambia aquí.'); end if;
@@ -170,12 +183,13 @@ begin
         'before', (select name from research.users where id = uid), 'after', (select name from research.users where id = target)));
       moved := moved + 1;
     end loop;
-    update research.participants set is_active = 0, removed_at = now() where project_id = pid and user_id = uid;
+    update research.participants set is_active = 0, removed_at = now(), can_manage = 0 where project_id = pid and user_id = uid;
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;
   perform research.event_project(pid, u.id, 'participant', uid, act, jsonb_build_object(
-    'user', (select name from research.users where id = uid), 'project_role', d -> 'project_role', 'activities_moved', moved));
+    'user', (select name from research.users where id = uid), 'project_role', d -> 'project_role', 'activities_moved', moved,
+    'can_manage', d -> 'can_manage'));
   return research.ok(jsonb_build_object('id', uid, 'project_id', pid, 'activities_moved', moved));
 end $$;
 
@@ -261,7 +275,7 @@ begin
   elsif act = 'detail' then
     if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
     return research.ok(jsonb_build_object('item', research.activity_json(a) || jsonb_build_object(
-      'project_status', p.status, 'lead_id', p.responsible_researcher_id,
+      'project_status', p.status, 'lead_id', p.responsible_researcher_id, 'i_can_manage', research.can_manage(p, u),
       'history', research.history_items(pid, 'activity', a.id))));
   end if;
 
@@ -270,7 +284,7 @@ begin
   eid := a.id;
 
   if act in ('create', 'update') then
-    perform research.project_lead(p, u);
+    perform research.project_manager(p, u);
     uid := research.req_id(d, 'participant_id');
     perform research.participant_valid(pid, uid);
     v_deadline := research.req_date(d, 'deadline');
@@ -296,7 +310,10 @@ begin
     update research.activities set status = 'in_review', observations = nullif(research.opt_text(d, 'comment', 65535), ''), updated_at = now() where id = eid;
   elsif act = 'review' then
     if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
-    perform research.project_lead(p, u);
+    perform research.project_manager(p, u);
+    if a.participant_id = u.id and p.responsible_researcher_id <> u.id then
+      perform research.fail(403, 'Tu propia actividad la revisa el investigador responsable u otra persona con permiso.');
+    end if;
     decision := research.req_text(d, 'decision', 30);
     if decision not in ('approved', 'changes_requested') then perform research.fail(422, 'Decisión inválida.'); end if;
     if not (a.status = 'in_review' or (a.status = 'completed' and decision = 'changes_requested')) then
@@ -307,7 +324,7 @@ begin
     update research.activities set status = next_s, observations = nullif(obs, ''), updated_at = now() where id = eid;
   elsif act = 'cancel' then
     if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
-    perform research.project_lead(p, u);
+    perform research.project_manager(p, u);
     if a.status in ('completed', 'cancelled') then perform research.fail(409, 'La actividad ya está cerrada.'); end if;
     obs := research.req_text(d, 'reason', 2000);
     update research.activities set status = 'cancelled', observations = obs, updated_at = now() where id = eid;
@@ -359,7 +376,7 @@ begin
   end if;
 
   perform research.project_active(p);
-  perform research.project_lead(p, u);
+  perform research.project_manager(p, u);
   eid := m.id;
 
   if act in ('create', 'update') then
