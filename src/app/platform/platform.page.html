@@ -371,6 +371,16 @@
               <button type="button" class="danger" (click)="cancelProposal()"><app-icon name="ban"></app-icon>Cancelar propuesta</button>
             </section>
           }
+          @if (canDeleteProposal) {
+            <section class="danger-zone">
+              <div class="danger-icon"><app-icon name="trash" [size]="24"></app-icon></div>
+              <div class="danger-text-block">
+                <h3>{{ proposal['project_id'] ? 'Eliminar propuesta y su proyecto' : 'Eliminar propuesta por completo' }}</h3>
+                <p>{{ proposal['project_id'] ? 'Borra la propuesta y su proyecto con todo lo que contiene. No se puede deshacer.' : 'Borra la propuesta, su archivo y su historial. No se puede deshacer; si solo quieres detenerla, cancélala.' }}</p>
+              </div>
+              <button type="button" class="danger" (click)="deleteProposal()"><app-icon name="trash"></app-icon>Eliminar</button>
+            </section>
+          }
           @if (proposal['status'] === 'cancelled' && proposal['project_id']) {
             <div class="callout tone-cancelled"><strong><app-icon name="ban"></app-icon>Su proyecto también está cancelado</strong>
               <p>Al reactivar la propuesta, el proyecto se reabre.</p></div>
@@ -469,6 +479,16 @@
                 @if (role === 'coordinator' && ['finalized','cancelled'].includes(project['status'])) { <button type="button" class="primary" (click)="reopenProject()"><app-icon name="refresh"></app-icon>Reabrir proyecto</button> }
               </div>
             </section>
+            @if (role === 'coordinator') {
+              <section class="danger-zone">
+                <div class="danger-icon"><app-icon name="trash" [size]="24"></app-icon></div>
+                <div class="danger-text-block">
+                  <h3>Eliminar proyecto por completo</h3>
+                  <p>Borra el proyecto, su propuesta, actividades, hitos, documentos, evidencias e historial. No se puede deshacer; si solo quieres detenerlo, usa «Cancelar proyecto».</p>
+                </div>
+                <button type="button" class="danger" (click)="deleteProject()"><app-icon name="trash"></app-icon>Eliminar proyecto</button>
+              </section>
+            }
 
           } @else if (tab === 'Equipo') {
             <section class="panel tab-panel">

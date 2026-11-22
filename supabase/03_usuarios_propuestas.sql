@@ -424,6 +424,17 @@ begin
     return research.ok(jsonb_build_object('items', (
       select coalesce(jsonb_agg(to_jsonb(h) || jsonb_build_object('actor_name', x.name, 'actor_role', x.role) order by h.id desc), '[]')
       from research.proposal_history h left join research.users x on x.id = h.actor_id where h.proposal_id = pid)));
+  elsif act = 'delete' then
+    -- El autor elimina su propuesta mientras no sea proyecto; Coordinación puede eliminar cualquiera (con su proyecto).
+    if u.role <> 'coordinator' then
+      if p.author_id <> u.id then perform research.fail(403, 'Solo el autor o Coordinación pueden eliminar la propuesta.'); end if;
+      if exists (select 1 from research.projects where proposal_id = pid) then
+        perform research.fail(409, 'Esta propuesta ya es un proyecto; solo Coordinación puede eliminarlo por completo. Si ya no se hará, cancélala.');
+      end if;
+    end if;
+    if upper(btrim(coalesce(d ->> 'confirm', ''))) <> 'ELIMINAR' then perform research.fail(422, 'Escribe ELIMINAR para confirmar.'); end if;
+    perform research.proposal_purge(p, u.id);
+    return research.ok(jsonb_build_object('deleted', pid));
 
   elsif act = 'update' then
     -- Corregir y reenviar en un solo paso.

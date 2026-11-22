@@ -38,6 +38,76 @@ begin
     'after', (select name from research.users where id = uid), 'reason', nullif(why, '')));
 end $$;
 
+-- Eliminar un proyecto por completo (solo Coordinación): proyecto, su propuesta y todo lo que cuelga de ellos.
+create or replace function research.project_counts(p research.projects)
+returns jsonb language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select jsonb_build_object(
+    'title', p.title, 'status', p.status,
+    'activities', (select count(*) from research.activities where project_id = p.id),
+    'milestones', (select count(*) from research.milestones where project_id = p.id),
+    'documents', (select count(*) from research.documents where (project_id = p.id or proposal_id = p.proposal_id) and kind <> 'evidence'),
+    'evidence', (select count(*) from research.documents where project_id = p.id and kind = 'evidence'),
+    'members', (select count(*) from research.participants where project_id = p.id and is_active = 1));
+$$;
+
+create or replace function research.project_purge(p research.projects)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare acts integer[]; docs integer[];
+begin
+  select coalesce(array_agg(id), '{}') into acts from research.activities where project_id = p.id;
+  select coalesce(array_agg(id), '{}') into docs from research.documents
+    where project_id = p.id or proposal_id = p.proposal_id or activity_id = any(acts);
+  delete from research.notifications where link = 'projects/' || p.id or link = 'proposals/' || p.proposal_id
+    or link = any(select 'activities/' || unnest(acts));
+  delete from research.document_chunks where document_id = any(docs);
+  delete from research.document_versions where document_id = any(docs);
+  delete from research.documents where id = any(docs);
+  delete from research.milestone_activities where activity_id = any(acts)
+    or milestone_id in (select id from research.milestones where project_id = p.id);
+  delete from research.milestones where project_id = p.id;
+  delete from research.activities where project_id = p.id;
+  delete from research.closures where project_id = p.id;
+  delete from research.project_history where project_id = p.id;
+  delete from research.participants where project_id = p.id;
+  delete from research.researcher_change_requests where project_id = p.id or proposal_id = p.proposal_id;
+  update research.assistant_log set project_id = null where project_id = p.id;
+  delete from research.projects where id = p.id;
+  delete from research.proposal_history where proposal_id = p.proposal_id;
+  delete from research.proposals where id = p.proposal_id;
+end $$;
+
+-- ------------------------------------------------------------------
+-- Eliminar por completo una propuesta. Si ya era proyecto, se usa project_purge (borra ambos).
+-- ------------------------------------------------------------------
+create or replace function research.proposal_purge(x research.proposals, actor integer)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare p research.projects; docs integer[];
+begin
+  select * into p from research.projects where proposal_id = x.id;
+  if p.id is not null then
+    perform research.notify(array_remove(research.team_ids(p.id), actor), 'Se eliminó el proyecto «' || p.title || '»',
+      'Se eliminó por completo junto con su propuesta, actividades y documentos.', 'projects', 'cancelled');
+    insert into research.deleted_items (kind, title, details, deleted_by) values ('project', p.title, research.project_counts(p), actor);
+    perform research.project_purge(p);
+    return;
+  end if;
+  perform research.notify(array_remove(array[x.author_id, x.responsible_researcher_id], actor), 'Se eliminó la propuesta «' || x.title || '»',
+    null, 'proposals', 'cancelled');
+  select coalesce(array_agg(id), '{}') into docs from research.documents where proposal_id = x.id;
+  delete from research.notifications where link = 'proposals/' || x.id;
+  delete from research.document_chunks where document_id = any(docs);
+  delete from research.document_versions where document_id = any(docs);
+  delete from research.documents where id = any(docs);
+  delete from research.researcher_change_requests where proposal_id = x.id;
+  delete from research.proposal_history where proposal_id = x.id;
+  delete from research.proposals where id = x.id;
+  insert into research.deleted_items (kind, title, details, deleted_by)
+    values ('proposal', x.title, jsonb_build_object('status', x.status, 'author', (select name from research.users where id = x.author_id)), actor);
+end $$;
+
 -- ------------------------------------------------------------------
 create or replace function research.ep_projects(u research.users, act text, d jsonb, is_post boolean)
 returns jsonb language plpgsql
@@ -88,6 +158,20 @@ begin
   end if;
 
   if u.role <> 'coordinator' then perform research.fail(403, 'Solo Coordinación puede hacer este cambio.'); end if;
+
+  if act = 'delete-impact' then
+    return research.ok(jsonb_build_object('impact', research.project_counts(p)));
+  elsif act = 'delete' then
+    -- Se confirma escribiendo ELIMINAR; no se puede deshacer.
+    if upper(btrim(coalesce(d ->> 'confirm', ''))) <> 'ELIMINAR' then
+      perform research.fail(422, 'Escribe ELIMINAR para confirmar.');
+    end if;
+    perform research.notify(array_remove(research.team_ids(pid), u.id), 'Se eliminó el proyecto «' || p.title || '»',
+      'Coordinación lo eliminó por completo junto con sus actividades y documentos.', 'projects', 'cancelled');
+    insert into research.deleted_items (kind, title, details, deleted_by) values ('project', p.title, research.project_counts(p), u.id);
+    perform research.project_purge(p);
+    return research.ok(jsonb_build_object('deleted', pid));
+  end if;
 
   if act = 'change-researcher' then
     perform research.project_set_researcher(p, research.req_id(d, 'researcher_id'), u.id, research.opt_text(d, 'reason', 2000));

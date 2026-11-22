@@ -558,6 +558,34 @@ export class PlatformPage implements OnInit {
     return !!this.proposal && (this.isAuthor || this.role === 'coordinator') &&
       !['rejected', 'cancelled'].includes(this.proposal['status']) && this.proposal['project_status'] !== 'finalized';
   }
+  /** El autor borra su propuesta mientras no sea proyecto; Coordinación puede borrar cualquiera. */
+  get canDeleteProposal(): boolean {
+    const p = this.proposal;
+    return !!p && (this.role === 'coordinator' || (this.isAuthor && !p['project_id']));
+  }
+  deleteProposal(): void {
+    const p = this.proposal!;
+    const withProject = !!p['project_id'];
+    const notes: NonNullable<Dialog['notes']> = withProject
+      ? [{ icon: 'folder', text: 'Ya es un proyecto: también se borra el proyecto con sus actividades, hitos, documentos, evidencias e historial.' },
+         { icon: 'users', text: 'El equipo deja de verlo; se les avisa por notificación.' }]
+      : [{ icon: 'proposal', text: 'Se borra la propuesta, su archivo adjunto y su historial.' },
+         { icon: 'review', text: `Sale de la bandeja de «${p['researcher_name']}» y se le avisa.` }];
+    this.openDialog({
+      title: withProject ? 'Eliminar propuesta y su proyecto' : 'Eliminar propuesta por completo', confirmLabel: 'Sí, eliminar para siempre', danger: true, values: {},
+      warning: `¿Segura que quieres eliminar «${p['title']}»? Se borra para siempre y nadie podrá volver a consultarla. ` +
+        (p['status'] === 'cancelled' || p['status'] === 'rejected' ? '' : 'Si solo quieres detenerla, mejor usa «Cancelar propuesta» (se puede reactivar).'),
+      notesTitle: 'Esto se va a borrar', notes,
+      fields: [{ key: 'confirm', label: 'Para confirmar, escribe la palabra ELIMINAR', type: 'text', required: true, placeholder: 'ELIMINAR' }],
+      submit: async values => {
+        if (String(values['confirm']).trim().toUpperCase() !== 'ELIMINAR') throw new Error('Escribe ELIMINAR para confirmar.');
+        await this.post('proposals/delete.php', { proposal_id: p['id'], confirm: values['confirm'] });
+        this.proposal = undefined;
+        await this.router.navigate(['/app/proposals']);
+        return `Se eliminó «${p['title']}».`;
+      },
+    });
+  }
   get cancelConsequence(): string {
     const p = this.proposal;
     if (!p) return '';
@@ -1113,6 +1141,34 @@ export class PlatformPage implements OnInit {
         intro: `${p['researcher_name']} seguirá en el equipo como investigador y conservará su historial.`,
         fields: [{ key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', required: true, options }],
         submit: async values => { await this.post('projects/change-researcher.php', { project_id: p['id'], ...values }); return 'Responsable actualizado.'; },
+      });
+    });
+  }
+
+  /** Solo Coordinación: borra el proyecto y todo lo que cuelga de él (con su propuesta). */
+  deleteProject(): void {
+    const p = this.project!;
+    void this.withOptions(async () => {
+      const c: Row = (await this.api.request<Row>('projects/delete-impact.php', { project_id: p['id'] }))['impact'] || {};
+      const n = (v: unknown, one: string, many: string) => `${Number(v) || 0} ${Number(v) === 1 ? one : many}`;
+      this.openDialog({
+        title: 'Eliminar proyecto por completo', confirmLabel: 'Sí, eliminar para siempre', danger: true, values: {},
+        warning: `¿Segura que quieres eliminar «${p['title']}»? Se borra para siempre junto con su propuesta; nadie podrá volver a consultarlo. ` +
+          'Si solo quieres detenerlo, mejor usa «Cancelar proyecto» (se puede reabrir).',
+        notesTitle: 'Esto se va a borrar', notes: [
+          { icon: 'tasks', text: `${n(c['activities'], 'actividad', 'actividades')} y ${n(c['milestones'], 'hito', 'hitos')}` },
+          { icon: 'file', text: `${n(c['documents'], 'documento', 'documentos')} (con todas sus versiones) y ${n(c['evidence'], 'evidencia', 'evidencias')}` },
+          { icon: 'users', text: `El equipo (${n(c['members'], 'integrante', 'integrantes')}) deja de verlo; se les avisa por notificación.` },
+          { icon: 'clock', text: 'El historial del proyecto y de su propuesta, sus cierres y solicitudes.' },
+        ],
+        fields: [{ key: 'confirm', label: 'Para confirmar, escribe la palabra ELIMINAR', type: 'text', required: true, placeholder: 'ELIMINAR' }],
+        submit: async values => {
+          if (String(values['confirm']).trim().toUpperCase() !== 'ELIMINAR') throw new Error('Escribe ELIMINAR para confirmar.');
+          await this.post('projects/delete.php', { project_id: p['id'], confirm: values['confirm'] });
+          this.project = undefined;
+          await this.router.navigate(['/app/projects']);
+          return `Se eliminó «${p['title']}».`;
+        },
       });
     });
   }
