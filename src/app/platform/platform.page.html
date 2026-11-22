@@ -346,7 +346,7 @@
             @if (proposal['justification']) { <h3>Justificación</h3><p class="prose">{{ proposal['justification'] }}</p> }
             @if (proposal['file']) {
               <h3>Archivo adjunto</h3>
-              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(proposal['file'].filename))" (click)="viewProposalFile()" title="Ver archivo">{ extOf(proposal['file'].filename) }</button><div class="file-main"><strong>{{ proposal['file'].filename }}</strong><small>{{ (proposal['file'].size_bytes / 1024) | number:'1.0-0' }} KB</small></div>
+              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(proposal['file'].filename))" (click)="viewProposalFile()" title="Ver archivo">{{ extOf(proposal['file'].filename) }}</button><div class="file-main"><strong>{{ proposal['file'].filename }}</strong><small>{{ (proposal['file'].size_bytes / 1024) | number:'1.0-0' }} KB</small></div>
                 <div class="row-actions"><button type="button" class="text-button view-btn" (click)="viewProposalFile()"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="downloadProposalFile()"><app-icon name="download"></app-icon>Descargar</button></div></div>
             }
             <div class="actions">
@@ -550,7 +550,7 @@
               @if (documents.length > 3) { <input class="tab-search" type="search" aria-label="Buscar documento" [(ngModel)]="documentFilter" placeholder="Buscar documento…"> }
               @for (d of visibleDocuments; track d.id) {
                 <div class="file-row">
-                  <button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(d.filename))" (click)="view('documents', d.id, undefined, d.title)" title="Ver archivo">{ extOf(d.filename) }</button>
+                  <button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(d.filename))" (click)="view('documents', d.id, undefined, d.title)" title="Ver archivo">{{ extOf(d.filename) }}</button>
                   <div class="file-main"><strong>{{ d.title }}</strong> @if (+d.restricted) { <span class="badge tone-neutral">Solo investigadores</span> }
                     <small>v{{ d.version }} · {{ d.filename }} · {{ d.uploaded_by_name }} · {{ date(d.updated_at) }}</small></div>
                   <div class="row-actions">
@@ -565,7 +565,7 @@
                 @if (versionsOf === d.id) {
                   <div class="versions">
                     @for (v of versions; track v.id) {
-                      <div class="list-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(v.filename))" (click)="view('documents', d.id, v.version, d.title + ' · v' + v.version)" title="Ver archivo">{ extOf(v.filename) }</button><div class="file-main"><strong>v{{ v.version }} · {{ v.filename }}</strong><small>{{ v.uploaded_by_name }} · {{ date(v.created_at) }}{{ v.note ? ' · ' + v.note : '' }}</small></div>
+                      <div class="list-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(v.filename))" (click)="view('documents', d.id, v.version, d.title + ' · v' + v.version)" title="Ver archivo">{{ extOf(v.filename) }}</button><div class="file-main"><strong>v{{ v.version }} · {{ v.filename }}</strong><small>{{ v.uploaded_by_name }} · {{ date(v.created_at) }}{{ v.note ? ' · ' + v.note : '' }}</small></div>
                         <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('documents', d.id, v.version, d.title + ' · v' + v.version)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('documents', d.id, v.version)"><app-icon name="download"></app-icon>Descargar</button></div></div>
                     }
                   </div>
@@ -620,14 +620,14 @@
           @if (activity['materials']?.length) {
             <section class="panel"><h2><app-icon name="file"></app-icon>Material de apoyo</h2>
               @for (f of activity['materials']; track f.id) {
-                <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(f.filename))" (click)="view('documents', f.id, undefined, f.title)" title="Ver archivo">{ extOf(f.filename) }</button><div class="file-main"><strong>{{ f.title }}</strong><small>{{ f.filename }} · {{ f.uploaded_by_name }} · {{ date(f.updated_at) }}</small></div>
+                <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(f.filename))" (click)="view('documents', f.id, undefined, f.title)" title="Ver archivo">{{ extOf(f.filename) }}</button><div class="file-main"><strong>{{ f.title }}</strong><small>{{ f.filename }} · {{ f.uploaded_by_name }} · {{ date(f.updated_at) }}</small></div>
                   <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('documents', f.id, undefined, f.title)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('documents', f.id)"><app-icon name="download"></app-icon>Descargar</button></div></div>
               }
             </section>
           }
           <section class="panel tab-panel short"><h2>Evidencias</h2>
             @for (e of evidence; track e.id) {
-              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(e.filename))" (click)="view('evidence', e.id, undefined, e.title)" title="Ver archivo">{ extOf(e.filename) }</button><div class="file-main"><strong>{{ e.title }}</strong><small>{{ e.filename }} · {{ e.uploaded_by_name }} · {{ date(e.updated_at) }}</small></div>
+              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(e.filename))" (click)="view('evidence', e.id, undefined, e.title)" title="Ver archivo">{{ extOf(e.filename) }}</button><div class="file-main"><strong>{{ e.title }}</strong><small>{{ e.filename }} · {{ e.uploaded_by_name }} · {{ date(e.updated_at) }}</small></div>
                 <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('evidence', e.id, undefined, e.title)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('evidence', e.id)"><app-icon name="download"></app-icon>Descargar</button>
                   @if (activityEditable && activityOpen && +e.created_by === me) { <button type="button" class="text-button danger-text" (click)="removeEvidence(e)"><app-icon name="trash"></app-icon>Quitar</button> }</div></div>
             } @empty { <p class="muted">Sin evidencias adjuntas.</p> }
@@ -670,7 +670,7 @@
             @if (role === 'coordinator') { <button type="button" class="primary" (click)="uploadDocument(undefined, true)"><app-icon name="plus"></app-icon>Agregar fuente</button> }</div>
           <section class="panel tab-panel">
             @for (d of sources; track d.id) {
-              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(d.filename))" (click)="view('institutional-documents', d.id, undefined, d.title)" title="Ver archivo">{ extOf(d.filename) }</button><div class="file-main"><strong>{{ d.title }}</strong><small>v{{ d.version }} · {{ date(d.updated_at) }}{{ d.indexed ? '' : ' · sin texto para el asistente' }}</small></div>
+              <div class="file-row"><button type="button" class="file-ext small as-button" [style.background]="fileIcon(extOf(d.filename))" (click)="view('institutional-documents', d.id, undefined, d.title)" title="Ver archivo">{{ extOf(d.filename) }}</button><div class="file-main"><strong>{{ d.title }}</strong><small>v{{ d.version }} · {{ date(d.updated_at) }}{{ d.indexed ? '' : ' · sin texto para el asistente' }}</small></div>
                 <div class="row-actions"><button type="button" class="text-button view-btn" (click)="view('institutional-documents', d.id, undefined, d.title)"><app-icon name="eye"></app-icon>Ver</button><button type="button" class="text-button" (click)="download('institutional-documents', d.id)"><app-icon name="download"></app-icon>Descargar</button>
                   @if (role === 'coordinator') {
                     <button type="button" class="text-button" (click)="uploadDocument(d, true)"><app-icon name="upload"></app-icon>Nueva versión</button>
