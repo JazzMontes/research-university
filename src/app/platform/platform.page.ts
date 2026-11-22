@@ -43,7 +43,13 @@ export interface DialogField {
   /** Texto gris dentro de la caja que desaparece al escribir. */
   placeholder?: string;
   min?: string;
+  /** Archivos: permite elegir varios a la vez. */
+  multiple?: boolean;
+  /** Archivos: campo de título que se llena solo con el nombre del primer archivo. */
+  titleKey?: string;
 }
+/** Archivo elegido en un formulario, con el título que se le dará. */
+export interface PickedFile { file: File; title: string; }
 export interface Dialog {
   title: string;
   intro?: string;
@@ -57,7 +63,7 @@ export interface Dialog {
   fields: DialogField[];
   values: Row;
   /** Devuelve el mensaje de éxito que se muestra al cerrar. */
-  submit: (values: Row, file?: File) => Promise<string>;
+  submit: (values: Row, file?: File, files?: PickedFile[]) => Promise<string>;
 }
 
 interface ChatMessage { author: string; text: string; html?: string; pending?: boolean; attachment?: string; }
@@ -208,7 +214,13 @@ export class PlatformPage implements OnInit {
     const total = Number(item?.['total_activities'] || 0);
     return total ? Math.round(100 * Number(item?.['completed_activities'] || 0) / total) : 0;
   }
-  deadlineTone(label: unknown): string { return label === 'Retrasada' ? 'cancelled' : label === 'Próxima a vencer' ? 'progress' : 'neutral'; }
+  /** Las fechas son estimadas: «Fecha pasada» (dentro de 3 días de tolerancia) aún no cuenta como retraso. */
+  deadlineTone(label: unknown): string {
+    return ({ 'Retrasada': 'cancelled', 'Fecha pasada': 'changes', 'Vence hoy': 'progress', 'Próxima a vencer': 'progress' } as Record<string, string>)[String(label)] || 'neutral';
+  }
+  showDeadlineBadge(label: unknown): boolean { return ['Retrasada', 'Fecha pasada', 'Vence hoy', 'Próxima a vencer'].includes(String(label)); }
+  /** «fecha estimada 12/12/2026» o «sin fecha». */
+  dueText(deadline: unknown): string { return deadline ? `fecha estimada ${this.date(deadline)}` : 'sin fecha'; }
 
   // =====================================================================
   // Ciclo de vida
@@ -302,6 +314,12 @@ export class PlatformPage implements OnInit {
           const item = result['item'];
           const files = await this.api.request<Row>('evidence/list.php', { project_id: item['project_id'], activity_id: item['id'] });
           if (fresh()) { this.activity = item; this.evidence = files['items']; }
+          break;
+        }
+        case 'calendar': {
+          const range = this.calRange();
+          const result = await this.api.request<Row>('calendar/list.php', { from: range.from, to: range.to, scope: this.calScope });
+          if (fresh()) this.cal = result;
           break;
         }
         case 'users': {
@@ -636,6 +654,10 @@ export class PlatformPage implements OnInit {
     this.dialog = dialog;
     this.dialogError = '';
     this.dialogFile = undefined;
+    this.dialogFiles = [];
+    this.previewIndex = 0;
+    this.autoTitle = '';
+    this.dialogProgress = '';
     void this.buildPreview(undefined);
     this.shown = {};
     for (const field of dialog.fields) {
@@ -775,19 +797,74 @@ export class PlatformPage implements OnInit {
   fileIcon(ext: string): string {
     return ({ PDF: '#c0392b', DOC: '#2b5797', DOCX: '#2b5797', XLS: '#1e7145', XLSX: '#1e7145', CSV: '#1e7145', PPT: '#d24726', PPTX: '#d24726' } as Record<string, string>)[ext] || '#5b6b68';
   }
-  clearDialogFile(input: HTMLInputElement): void {
-    input.value = ''; this.dialogFile = undefined; this.dialogError = ''; void this.buildPreview(undefined);
+  clearDialogFile(input: HTMLInputElement, field: DialogField): void {
+    input.value = ''; this.dialogFiles = []; this.dialogError = ''; this.syncFiles(field); void this.buildPreview(undefined);
   }
 
-  chooseFile(event: Event): void {
-    const file = (event.target as HTMLInputElement).files?.[0];
-    this.dialogFile = file;
-    this.dialogError = '';
-    void this.buildPreview(file);
-    if (file && file.size > this.backend.maxUploadBytes) {
-      this.dialogError = `El archivo pesa ${(file.size / 1048576).toFixed(1)} MB; el máximo es ${this.backend.maxUploadBytes / 1048576} MB.`;
-    }
+  /** Archivos elegidos en el formulario abierto (uno o varios) y el que se está viendo en la vista previa. */
+  dialogFiles: PickedFile[] = [];
+  previewIndex = 0;
+  dialogProgress = '';
+  private autoTitle = '';
+  baseName(name: string): string { return name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').trim().slice(0, 250); }
+  /** El campo de título se oculta cuando hay varios archivos (cada uno lleva el suyo). */
+  hiddenByFiles(field: DialogField): boolean {
+    const fileField = this.dialog?.fields.find(f => f.type === 'file');
+    return !!fileField?.titleKey && fileField.titleKey === field.key && this.dialogFiles.length > 1;
   }
+  chooseFile(event: Event, field: DialogField): void {
+    const input = event.target as HTMLInputElement;
+    const chosen = Array.from(input.files || []);
+    input.value = '';
+    if (!chosen.length) return;
+    this.dialogError = '';
+    const max = this.backend.maxUploadBytes;
+    const tooBig = chosen.filter(f => f.size > max);
+    const ok = chosen.filter(f => f.size <= max);
+    if (tooBig.length) {
+      this.dialogError = (tooBig.length === 1 ? `«${tooBig[0].name}» pesa ${(tooBig[0].size / 1048576).toFixed(1)} MB` : `${tooBig.length} archivos pesan`) +
+        ` más de ${max / 1048576} MB y no se agregaron.`;
+    }
+    const picked = ok.map(f => ({ file: f, title: this.baseName(f.name) }));
+    if (field.multiple) {
+      const seen = new Set(this.dialogFiles.map(p => p.file.name + p.file.size));
+      this.dialogFiles = [...this.dialogFiles, ...picked.filter(p => !seen.has(p.file.name + p.file.size))];
+    } else {
+      this.dialogFiles = picked.slice(0, 1);
+    }
+    this.syncFiles(field);
+    this.previewIndex = Math.max(0, this.dialogFiles.length - picked.length);
+    void this.buildPreview(this.dialogFiles[this.previewIndex]?.file);
+  }
+  /** Llena el título con el nombre del primer archivo (si la persona no escribió otro). */
+  private syncFiles(field: DialogField): void {
+    this.dialogFile = this.dialogFiles[0]?.file;
+    if (!field.titleKey || !this.dialog) return;
+    const current = String(this.dialog.values[field.titleKey] ?? '');
+    const first = this.dialogFiles[0];
+    if (first && (!current.trim() || current === this.autoTitle)) {
+      this.dialog.values[field.titleKey] = first.title;
+      this.autoTitle = first.title;
+    }
+    if (!first && current === this.autoTitle) { this.dialog.values[field.titleKey] = ''; this.autoTitle = ''; }
+  }
+  removePicked(index: number, field: DialogField): void {
+    this.dialogFiles = this.dialogFiles.filter((_, i) => i !== index);
+    this.syncFiles(field);
+    this.previewIndex = Math.min(this.previewIndex, Math.max(0, this.dialogFiles.length - 1));
+    void this.buildPreview(this.dialogFiles[this.previewIndex]?.file);
+  }
+  dropActive = false;
+  dropFiles(event: DragEvent, field: DialogField): void {
+    event.preventDefault();
+    this.dropActive = false;
+    const list = event.dataTransfer?.files;
+    if (!list?.length) return;
+    // Se reutiliza la misma lógica que al elegir con el botón.
+    this.chooseFile({ target: { files: list, value: '' } } as unknown as Event, field);
+  }
+  showPicked(index: number): void { this.previewIndex = index; void this.buildPreview(this.dialogFiles[index]?.file); }
+  fileSize(bytes: number): string { return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`; }
   passwordOk(value: unknown): boolean { return PASSWORD_RULE.test(String(value || '')); }
 
   async submitDialog(): Promise<void> {
@@ -795,8 +872,8 @@ export class PlatformPage implements OnInit {
     if (!dialog || this.saving) return;
     const values = dialog.values;
     const missing = dialog.fields.filter(field => {
-      if (!this.isRequired(field)) return false;
-      if (field.type === 'file') return !this.dialogFile;
+      if (!this.isRequired(field) || this.hiddenByFiles(field)) return false;
+      if (field.type === 'file') return !this.dialogFiles.length;
       const value = values[field.key];
       return Array.isArray(value) ? value.length === 0 : String(value ?? '').trim() === '';
     });
@@ -811,11 +888,15 @@ export class PlatformPage implements OnInit {
         this.dialogError = `${field.label}: no puede ser antes del ${this.date(field.min)}.`; return;
       }
     }
-    if (this.dialogFile && this.dialogFile.size > this.backend.maxUploadBytes) return;
+    if (this.dialogFiles.some(p => !p.title.trim()) && this.dialogFiles.length > 1) { this.dialogError = 'Ponle título a cada archivo.'; return; }
+    // Con un solo archivo, su título es el del formulario.
+    const fileField = dialog.fields.find(f => f.type === 'file');
+    const files = this.dialogFiles.map((p, i) => ({ file: p.file, title: (i === 0 && this.dialogFiles.length === 1 && fileField?.titleKey
+      ? String(values[fileField.titleKey] ?? '') : p.title).trim() || this.baseName(p.file.name) }));
     this.saving = true;
     this.dialogError = '';
     try {
-      const text = await dialog.submit(values, this.dialogFile);
+      const text = await dialog.submit(values, this.dialogFiles[0]?.file, files);
       this.dialog = undefined;
       this.say(text);
       await this.load(true);
@@ -823,8 +904,23 @@ export class PlatformPage implements OnInit {
       this.dialogError = this.message(error, 'No se pudo guardar.');
     } finally {
       this.saving = false;
+      this.dialogProgress = '';
       this.changeDetector.markForCheck();
     }
+  }
+  /** Sube varios archivos uno por uno mostrando el avance; devuelve cuántos se subieron. */
+  private async uploadEach(files: PickedFile[], send: (p: PickedFile, body: Row) => Promise<unknown>): Promise<number> {
+    let done = 0;
+    for (const p of files) {
+      this.dialogProgress = files.length > 1 ? `Subiendo ${done + 1} de ${files.length}: ${p.file.name}…` : '';
+      this.changeDetector.markForCheck();
+      try { await send(p, await this.fileBody(p.file)); }
+      catch (error) {
+        throw new Error(done ? `Se subieron ${done} de ${files.length}. «${p.file.name}»: ${this.message(error, 'no se pudo subir.')}` : this.message(error, 'No se pudo subir.'));
+      }
+      done++;
+    }
+    return done;
   }
 
   private post(path: string, body: Row): Promise<Row> { return this.api.request<Row>(path, {}, body); }
@@ -1223,6 +1319,94 @@ export class PlatformPage implements OnInit {
     });
   }
 
+  /** Color del proyecto que se está viendo (o de la actividad): tiñe encabezado, pestañas, hitos y barras. */
+  get pageColor(): string {
+    if (this.section === 'projects' && this.project) return String(this.project['color'] || '');
+    if (this.section === 'activities' && this.activity) return String(this.activity['project_color'] || '');
+    return '';
+  }
+  readonly projectPalette = ['#2f80ed', '#9b51e0', '#e2557a', '#f2994a', '#219653', '#00a3a3', '#6c63ff', '#c27c0e', '#3d7ea6', '#b5487e'];
+  colorMenu = false;
+  get canColorProject(): boolean { return !!this.project && (this.role === 'coordinator' || this.canManagePlan); }
+  async setProjectColor(color: string): Promise<void> {
+    const p = this.project!;
+    this.colorMenu = false;
+    try {
+      const result = await this.post('projects/color.php', { project_id: p['id'], color });
+      p['color'] = result['color'];
+      this.say('Color del proyecto actualizado.');
+    } catch (error) { this.say(this.message(error, 'No se pudo cambiar el color.'), 'error'); }
+    this.changeDetector.markForCheck();
+  }
+
+  // =====================================================================
+  // Calendario
+  // =====================================================================
+  cal: Row = {};
+  calMonth = (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
+  calScope: 'mine' | 'all' = 'mine';
+  calHidden = new Set<number>();
+  calSelected = '';
+  readonly weekDays = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+  private iso(d: Date): string { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+  /** 6 semanas que cubren el mes, empezando en lunes. */
+  private calStart(): Date { const d = new Date(this.calMonth); const shift = (d.getDay() + 6) % 7; d.setDate(d.getDate() - shift); return d; }
+  calRange(): { from: string; to: string } { const a = this.calStart(); const b = new Date(a); b.setDate(b.getDate() + 41); return { from: this.iso(a), to: this.iso(b) }; }
+  get calTitle(): string { const t = this.calMonth.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }); return t.charAt(0).toUpperCase() + t.slice(1); }
+  calMove(delta: number): void {
+    if (delta === 0) { const d = new Date(); this.calMonth = new Date(d.getFullYear(), d.getMonth(), 1); this.calSelected = this.iso(d); }
+    else this.calMonth = new Date(this.calMonth.getFullYear(), this.calMonth.getMonth() + delta, 1);
+    void this.load(true);
+  }
+  setCalScope(scope: 'mine' | 'all'): void { this.calScope = scope; void this.load(true); }
+  toggleCalProject(id: number): void {
+    const next = new Set(this.calHidden);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    this.calHidden = next;
+  }
+  private calVisible(item: Row): boolean { return !this.calHidden.has(Number(item['project_id'])); }
+  get calWeeks(): { iso: string; day: number; inMonth: boolean; today: boolean; weekend: boolean; items: Row[]; milestones: Row[] }[][] {
+    const start = this.calStart();
+    const today = String(this.cal['today'] || this.iso(new Date()));
+    const acts: Row[] = (this.cal['activities'] || []).filter((a: Row) => this.calVisible(a));
+    const ms: Row[] = (this.cal['milestones'] || []).filter((m: Row) => this.calVisible(m));
+    const weeks = [];
+    for (let w = 0; w < 6; w++) {
+      const row = [];
+      for (let k = 0; k < 7; k++) {
+        const d = new Date(start); d.setDate(start.getDate() + w * 7 + k);
+        const iso = this.iso(d);
+        row.push({ iso, day: d.getDate(), inMonth: d.getMonth() === this.calMonth.getMonth(), today: iso === today, weekend: k >= 5,
+          items: acts.filter(a => String(a['deadline']).slice(0, 10) === iso), milestones: ms.filter(m => String(m['due_date']).slice(0, 10) === iso) });
+      }
+      weeks.push(row);
+    }
+    return weeks;
+  }
+  get calDay(): { items: Row[]; milestones: Row[] } {
+    const iso = this.calSelected;
+    return { items: (this.cal['activities'] || []).filter((a: Row) => this.calVisible(a) && String(a['deadline']).slice(0, 10) === iso),
+      milestones: (this.cal['milestones'] || []).filter((m: Row) => this.calVisible(m) && String(m['due_date']).slice(0, 10) === iso) };
+  }
+  get calUndated(): Row[] { return (this.cal['undated'] || []).filter((a: Row) => this.calVisible(a)); }
+  get calCounts(): { pending: number; done: number; late: number } {
+    const acts: Row[] = (this.cal['activities'] || []).filter((a: Row) => this.calVisible(a) && String(a['deadline']).slice(0, 7) === this.iso(this.calMonth).slice(0, 7));
+    return { pending: acts.filter(a => a['status'] !== 'completed').length, done: acts.filter(a => a['status'] === 'completed').length,
+      late: acts.filter(a => a['deadline_status'] === 'Retrasada').length };
+  }
+  /** Clase de cada actividad en el calendario según su estado. */
+  calClass(a: Row): string {
+    if (a['status'] === 'completed') return 'ev done';
+    if (a['deadline_status'] === 'Retrasada') return 'ev late';
+    if (a['status'] === 'in_review') return 'ev review';
+    if (a['status'] === 'changes') return 'ev changes';
+    return 'ev';
+  }
+  calLabel(iso: string): string {
+    const d = new Date(iso + 'T12:00:00');
+    return d.toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+  }
+
   toggleManage(member: Row): void {
     const grant = !Number(member['can_manage']);
     this.openDialog({
@@ -1297,17 +1481,20 @@ export class PlatformPage implements OnInit {
         fields: [
           { key: 'description', label: 'Descripción', type: 'textarea', required: true, placeholder: 'Ej.: Tomar muestras de agua en las 3 comunidades' },
           { key: 'participant_id', label: 'Responsable', type: 'select', required: true, options },
-          { key: 'deadline', label: 'Fecha límite', type: 'date', required: true,
+          { key: 'deadline', label: 'Fecha estimada (opcional)', type: 'date',
             // No puede ser antes del día en que se creó la actividad (al crearla: hoy).
             min: existing ? String(existing['created_on'] || '').slice(0, 10) || undefined : this.todayIso,
-            hint: existing ? `Desde el ${this.date(existing['created_on'])}, día en que se creó la actividad.` : 'Desde hoy en adelante.' },
+            hint: 'Es aproximada: te recordamos 3 días antes y el mismo día. Si se pasa, hay 3 días de tolerancia antes de marcarla como retrasada.' +
+              (existing ? ` No puede ser antes del ${this.date(existing['created_on'])}, día en que se creó.` : '') },
           { key: 'milestone_id', label: 'Hito al que pertenece', type: 'select', options: hitoOptions,
             hint: 'El hito se marca como alcanzado solo, cuando todas sus actividades están completadas.' },
-          { key: 'file', label: existing ? 'Agregar material de apoyo (opcional)' : 'Material de apoyo (opcional)', type: 'file',
-            hint: 'Por ejemplo una guía o formato. PDF, Word, Excel, imagen o texto. Máximo 5 MB.' },
+          { key: 'file', label: existing ? 'Agregar material de apoyo (opcional)' : 'Material de apoyo (opcional)', type: 'file', multiple: true,
+            hint: 'Por ejemplo guías o formatos; puedes elegir varios. PDF, Word, Excel, imagen o texto. Máximo 5 MB cada uno.' },
         ],
-        submit: async (values, file) => {
-          const body: Row = { ...values, milestone_id: values['milestone_id'] === 'none' ? '' : values['milestone_id'], ...(await this.fileBody(file)) };
+        submit: async (values, _file, files = []) => {
+          const materials: Row[] = [];
+          for (const p of files) materials.push({ ...(await this.fileBody(p.file)), title: p.title });
+          const body: Row = { ...values, milestone_id: values['milestone_id'] === 'none' ? '' : values['milestone_id'], files: materials };
           delete body['file'];
           if (existing) await this.post('activities/update.php', { activity_id: existing['id'], ...body });
           else await this.post('activities/create.php', { project_id: projectId, ...body });
@@ -1431,14 +1618,15 @@ export class PlatformPage implements OnInit {
   addEvidence(): void {
     const a = this.activity!;
     this.openDialog({
-      title: 'Adjuntar evidencia', confirmLabel: 'Adjuntar', values: {},
+      title: 'Adjuntar evidencias', confirmLabel: 'Adjuntar', values: {},
       fields: [
-        { key: 'file', label: 'Archivo', type: 'file', required: true, hint: 'PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB.' },
-        { key: 'description', label: 'Descripción (opcional)', type: 'text' },
+        { key: 'file', label: 'Archivos', type: 'file', required: true, multiple: true, titleKey: 'description',
+          hint: 'Puedes elegir varios a la vez. PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB cada uno.' },
+        { key: 'description', label: 'Título', type: 'text', placeholder: 'Se llena con el nombre del archivo; puedes cambiarlo' },
       ],
-      submit: async (values, file) => {
-        await this.post('evidence/upload.php', { project_id: a['project_id'], activity_id: a['id'], description: values['description'], ...(await this.fileBody(file)) });
-        return 'Evidencia adjunta.';
+      submit: async (_values, _file, files = []) => {
+        const n = await this.uploadEach(files, (p, body) => this.post('evidence/upload.php', { project_id: a['project_id'], activity_id: a['id'], description: p.title, ...body }));
+        return n === 1 ? 'Evidencia adjunta.' : `${n} evidencias adjuntas.`;
       },
     });
   }
@@ -1462,7 +1650,8 @@ export class PlatformPage implements OnInit {
       values: existing ? { description: existing['description'], target_date: existing['target_date'] } : {},
       fields: [
         { key: 'description', label: 'Nombre del hito', type: 'text', required: true, placeholder: 'Ej.: Trabajo de campo' },
-        { key: 'target_date', label: 'Fecha meta', type: 'date', required: true, min: String(p['start_date'] || '').slice(0, 10) || undefined },
+        { key: 'target_date', label: 'Fecha meta (opcional)', type: 'date', min: String(p['start_date'] || '').slice(0, 10) || undefined,
+          hint: 'Si alguna de sus actividades termina después, el hito se aplaza solo a esa fecha y se avisa al equipo.' },
       ],
       submit: async values => {
         const body = { project_id: p['id'], ...values };
@@ -1486,21 +1675,27 @@ export class PlatformPage implements OnInit {
   // =====================================================================
   uploadDocument(existing?: Row, institutional = false): void {
     const module = institutional ? 'institutional-documents' : 'documents';
-    const fields: DialogField[] = existing ? [] : [{ key: 'title', label: 'Título', type: 'text', required: true }];
-    fields.push({ key: 'file', label: 'Archivo', type: 'file', required: true, hint: 'PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB.' });
+    // Al subir nuevos se pueden elegir varios; una nueva versión es un solo archivo. El título se llena solo.
+    const fields: DialogField[] = [{ key: 'file', label: existing ? 'Archivo' : 'Archivos', type: 'file', required: true, multiple: !existing,
+      titleKey: existing ? undefined : 'title',
+      hint: (existing ? '' : 'Puedes elegir varios a la vez. ') + 'PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB cada uno.' }];
+    if (!existing) fields.push({ key: 'title', label: 'Título', type: 'text', required: true, placeholder: 'Se llena con el nombre del archivo; puedes cambiarlo' });
     if (existing && !institutional) fields.push({ key: 'version_note', label: 'Qué cambió (opcional)', type: 'text' });
     this.openDialog({
       title: existing ? `Nueva versión de «${existing['title']}»` : institutional ? 'Agregar fuente' : 'Subir documento',
       confirmLabel: 'Subir', values: {}, fields,
       intro: existing ? 'Las versiones anteriores se conservan y se pueden descargar.' : undefined,
-      submit: async (values, file) => {
-        const body: Row = { ...values, ...(await this.fileBody(file)) };
-        delete body['file'];
-        if (!institutional) body['project_id'] = this.project!['id'];
-        if (existing) body['document_id'] = existing['id'];
+      submit: async (values, _file, files = []) => {
         const action = existing ? (institutional ? 'update' : 'upload-version') : 'upload';
-        await this.post(`${module}/${action}.php`, body);
-        return existing ? 'Nueva versión guardada.' : 'Archivo subido.';
+        const n = await this.uploadEach(files, (p, fileBody) => {
+          const body: Row = { ...values, ...fileBody };
+          delete body['file'];
+          if (!existing) body['title'] = p.title;
+          if (!institutional) body['project_id'] = this.project!['id'];
+          if (existing) body['document_id'] = existing['id'];
+          return this.post(`${module}/${action}.php`, body);
+        });
+        return existing ? 'Nueva versión guardada.' : n === 1 ? 'Archivo subido.' : `${n} archivos subidos.`;
       },
     });
   }

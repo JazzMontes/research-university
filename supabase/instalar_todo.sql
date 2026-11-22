@@ -66,9 +66,6 @@ create table if not exists research.proposals (
   author_id                   integer not null references research.users(id),
   responsible_researcher_id   integer not null references research.users(id),
   status                      varchar(50) not null,
-  is_archived                 smallint not null default 0,
-  status_before_archive       varchar(50),
-  correction_pending_resubmit smallint not null default 0,
   created_at                  timestamptz not null default now(),
   updated_at                  timestamptz not null default now()
 );
@@ -164,7 +161,6 @@ create table if not exists research.documents (
   activity_id integer references research.activities(id),
   title       varchar(250) not null,
   kind        varchar(20) not null check (kind in ('project','evidence','institutional')),
-  blocked     smallint not null default 0,
   restricted  smallint not null default 0,
   created_by  integer references research.users(id),
   deleted_at  timestamptz,
@@ -272,16 +268,20 @@ update research.proposals set status = 'changes_requested', returns_to = 'pendin
 update research.proposals set status = 'changes_requested', returns_to = 'pending_coordinator'
   where status = 'changes_requested_evaluator';
 update research.proposals set status = 'pending_coordinator' where status = 'under_evaluation';
--- Las archivadas pasan a "Cancelada" y se pueden reactivar.
-update research.proposals set
-    status_before_cancel = case coalesce(status_before_archive, status)
-      when 'changes_requested_researcher' then 'pending_researcher_review'
-      when 'changes_requested_evaluator' then 'pending_coordinator'
-      when 'under_evaluation' then 'pending_coordinator'
-      when 'changes_requested' then coalesce(returns_to, 'pending_coordinator')
-      else coalesce(status_before_archive, status) end,
-    status = 'cancelled', is_archived = 0, status_before_archive = null
-  where is_archived = 1;
+-- Las archivadas (v2) pasan a "Cancelada" y se pueden reactivar. Solo si la base todavía tiene esas columnas.
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_schema = 'research' and table_name = 'proposals' and column_name = 'is_archived') then
+    execute $q$update research.proposals set
+        status_before_cancel = case coalesce(status_before_archive, status)
+          when 'changes_requested_researcher' then 'pending_researcher_review'
+          when 'changes_requested_evaluator' then 'pending_coordinator'
+          when 'under_evaluation' then 'pending_coordinator'
+          when 'changes_requested' then coalesce(returns_to, 'pending_coordinator')
+          else coalesce(status_before_archive, status) end,
+        status = 'cancelled', is_archived = 0, status_before_archive = null
+      where is_archived = 1$q$;
+  end if;
+end $$;
 
 -- Actividades: ya no existe el paso "Comenzar".
 update research.activities set status = case when observations is not null and btrim(observations) <> '' then 'changes' else 'pending' end
@@ -353,6 +353,13 @@ create table if not exists research.deleted_items (
 );
 alter table research.deleted_items enable row level security;
 
+-- Fechas estimadas y opcionales: una actividad puede no tener fecha, y la fecha del hito se calcula
+-- con la más lejana de sus actividades (la fecha que se escribe en el hito es solo la meta original).
+alter table research.activities alter column deadline drop not null;
+-- Color para distinguir cada proyecto en toda la app (si está vacío se usa uno de la paleta).
+alter table research.projects add column if not exists color varchar(7);
+alter table research.milestones alter column target_date drop not null;
+
 -- Ajuste de fechas de proyectos existentes (va al final porque usa la tabla de cierres).
 update research.projects set start_date = (created_at at time zone 'America/Mexico_City')::date
   where start_date is distinct from (created_at at time zone 'America/Mexico_City')::date;
@@ -361,6 +368,18 @@ update research.projects p set finished_on = coalesce(
     (p.updated_at at time zone 'America/Mexico_City')::date)
   where p.status in ('finalized', 'cancelled') and p.finished_on is null;
 update research.projects set end_date = null where end_date is not null and end_date < start_date;
+
+-- =====================================================================
+-- Limpieza: lo que dejó la versión 2 y ya no usa nada (rol de evaluador y "archivar").
+-- Las propuestas archivadas ya se convirtieron arriba; el historial de cada propuesta conserva sus eventos.
+-- =====================================================================
+drop table if exists research.evaluations cascade;
+drop table if exists research.evaluation_assignments cascade;
+drop table if exists research.proposal_reviews cascade;
+alter table research.proposals drop column if exists is_archived;
+alter table research.proposals drop column if exists status_before_archive;
+alter table research.proposals drop column if exists correction_pending_resubmit;
+alter table research.documents drop column if exists blocked;
 
 -- >>>>>>>>>> 02_nucleo.sql
 -- =====================================================================
@@ -387,7 +406,7 @@ returns text language sql immutable as $$
     when 'title' then 'Título' when 'description' then 'Descripción' when 'objectives' then 'Objetivos'
     when 'observations' then 'Observaciones' when 'decision' then 'Decisión' when 'name' then 'Nombre'
     when 'username' then 'Usuario' when 'password' then 'Contraseña' when 'role' then 'Rol'
-    when 'status' then 'Estado' when 'deadline' then 'Fecha límite' when 'target_date' then 'Fecha objetivo'
+    when 'status' then 'Estado' when 'deadline' then 'Fecha estimada' when 'target_date' then 'Fecha meta'
     when 'start_date' then 'Fecha de inicio' when 'end_date' then 'Fecha de término'
     when 'filename' then 'Archivo' when 'question' then 'Pregunta' when 'project_role' then 'Rol en el proyecto'
     when 'reason' then 'Motivo' when 'comment' then 'Comentario' when 'email' then 'Correo' when 'justification' then 'Justificación' when 'note' then 'Nota'
@@ -547,6 +566,8 @@ begin
     values (u.id, research.sha256(token), now() + interval '30 minutes');
   -- Limpieza de sesiones viejas del mismo usuario.
   delete from research.user_sessions where user_id = u.id and (revoked_at is not null or expires_at < now() - interval '7 days');
+  -- De vez en cuando (1 de cada 20 inicios de sesión) se limpia lo viejo de todos.
+  if random() < 0.05 then perform research.housekeeping(); end if;
   return research.ok(jsonb_build_object('message', 'Inicio de sesión correcto.', 'user', research.public_user(u), 'token', token));
 end $$;
 
@@ -697,13 +718,27 @@ set search_path = research, extensions, pg_temp as $$
   values (pid, actor, entity, eid, act, details::text);
 $$;
 
+-- Las fechas son ESTIMADAS: hay 3 días de tolerancia antes de marcar una actividad como retrasada.
 create or replace function research.deadline_status(st text, deadline date)
-returns text language sql stable as $$
+returns text language sql stable
+set search_path = research, extensions, pg_temp as $$
   select case when st = 'completed' then 'Completada'
               when st = 'cancelled' then 'Cancelada'
-              when deadline < current_date then 'Retrasada'
-              when deadline <= current_date + 3 then 'Próxima a vencer'
+              when deadline is null then 'Sin fecha'
+              when deadline < research.today() - 3 then 'Retrasada'
+              when deadline < research.today() then 'Fecha pasada'
+              when deadline = research.today() then 'Vence hoy'
+              when deadline <= research.today() + 3 then 'Próxima a vencer'
               else 'Normal' end;
+$$;
+
+-- Fecha del hito: la meta escrita o, si alguna actividad termina después, la fecha más lejana de sus actividades.
+create or replace function research.milestone_due(mid integer)
+returns date language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select greatest((select target_date from research.milestones where id = mid),
+    (select max(a.deadline) from research.milestone_activities ma join research.activities a on a.id = ma.activity_id
+     where ma.milestone_id = mid and a.status <> 'cancelled'));
 $$;
 
 -- Un hito se alcanza solo: cuando todas sus actividades (no canceladas) están completadas.
@@ -716,20 +751,33 @@ set search_path = research, extensions, pg_temp as $$
 $$;
 
 -- Resumen de un proyecto (para listas, seguimiento y reportes). Las actividades canceladas no cuentan.
+-- Color del proyecto: el elegido o, si no hay, uno fijo de la paleta según su número.
+create or replace function research.project_color(p research.projects)
+returns text language sql immutable
+set search_path = research, extensions, pg_temp as $$
+  select coalesce(p.color, (array['#2F80ED','#9B51E0','#E2557A','#F2994A','#219653','#00A3A3','#6C63FF','#C27C0E','#3D7EA6','#B5487E'])[(p.id % 10) + 1]);
+$$;
+create or replace function research.project_color_by_id(pid integer)
+returns text language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select research.project_color(p) from research.projects p where p.id = pid;
+$$;
+
 create or replace function research.project_json(p research.projects)
 returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
   select to_jsonb(p) || jsonb_build_object(
     'researcher_name', (select name from research.users where id = p.responsible_researcher_id),
     'proposal_title', (select title from research.proposals where id = p.proposal_id),
+    'color', research.project_color(p),
     'total_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status <> 'cancelled'),
     'completed_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status = 'completed'),
-    'overdue_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status not in ('completed','cancelled') and a.deadline < current_date),
+    'overdue_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status not in ('completed','cancelled') and a.deadline < research.today() - 3),
     'total_milestones', (select count(*) from research.milestones m where m.project_id = p.id),
     'achieved_milestones', (select count(*) from research.milestones m where m.project_id = p.id and research.milestone_status(m.id) = 'achieved'),
-    'next_milestone', (select jsonb_build_object('description', m.description, 'target_date', m.target_date)
+    'next_milestone', (select jsonb_build_object('description', m.description, 'target_date', research.milestone_due(m.id))
                        from research.milestones m where m.project_id = p.id and research.milestone_status(m.id) = 'pending'
-                       order by m.target_date limit 1),
+                       order by research.milestone_due(m.id) nulls last limit 1),
     'active_participants', (select count(*) from research.participants t where t.project_id = p.id and t.is_active = 1)
   );
 $$;
@@ -1305,6 +1353,7 @@ set search_path = research, extensions, pg_temp as $$
   select jsonb_build_object('id', a.id, 'description', a.description, 'status', a.status, 'deadline', a.deadline,
     'deadline_status', research.deadline_status(a.status, a.deadline), 'project_id', a.project_id,
     'project_title', (select title from research.projects where id = a.project_id),
+    'project_color', research.project_color_by_id(a.project_id),
     'participant_name', (select name from research.users where id = a.participant_id));
 $$;
 
@@ -1360,7 +1409,7 @@ begin
         select a.status, count(*) total from research.activities a join research.projects p on p.id = a.project_id
         where a.project_id = any(vis) and a.status <> 'cancelled' and p.status <> 'cancelled' group by a.status) s),
     'overdue', (select count(*) from research.activities a join research.projects p on p.id = a.project_id
-        where a.project_id = any(vis) and a.status in ('pending', 'changes', 'in_review') and a.deadline < current_date and p.status in ('active', 'changes')),
+        where a.project_id = any(vis) and a.status in ('pending', 'changes', 'in_review') and a.deadline < research.today() - 3 and p.status in ('active', 'changes')),
     'progress', (select coalesce(jsonb_agg(x order by (x ->> 'percent')::int desc, x ->> 'title'), '[]') from (
         select jsonb_build_object('id', p.id, 'title', p.title, 'status', p.status,
           'percent', case when count(a.id) = 0 then 0 else round(100.0 * count(a.id) filter (where a.status = 'completed') / count(a.id)) end,
@@ -1437,6 +1486,26 @@ set search_path = research, extensions, pg_temp as $$
     'members', (select count(*) from research.participants where project_id = p.id and is_active = 1));
 $$;
 
+-- Tablas de versiones anteriores (p. ej. evaluaciones de la v2) que todavía apuntan a propuestas o proyectos:
+-- se limpian antes de borrar, para que la base no lo impida. Las tablas actuales se borran aparte.
+create or replace function research.purge_refs(target text, ids integer[])
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare r record;
+begin
+  if ids is null or cardinality(ids) = 0 then return; end if;
+  for r in select c.conrelid::regclass::text tbl, a.attname col
+           from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+           where c.contype = 'f' and c.confrelid = to_regclass(target) and array_length(c.conkey, 1) = 1
+             and c.conrelid::regclass::text not in ('research.projects', 'research.documents', 'research.proposal_history',
+               'research.researcher_change_requests', 'research.participants', 'research.activities', 'research.milestones',
+               'research.closures', 'research.project_history', 'research.milestone_activities', 'research.document_versions',
+               'research.document_chunks')
+  loop
+    execute format('delete from %s where %I = any($1)', r.tbl, r.col) using ids;
+  end loop;
+end $$;
+
 create or replace function research.project_purge(p research.projects)
 returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
@@ -1447,6 +1516,10 @@ begin
     where project_id = p.id or proposal_id = p.proposal_id or activity_id = any(acts);
   delete from research.notifications where link = 'projects/' || p.id or link = 'proposals/' || p.proposal_id
     or link = any(select 'activities/' || unnest(acts));
+  perform research.purge_refs('research.documents', docs);
+  perform research.purge_refs('research.activities', acts);
+  perform research.purge_refs('research.projects', array[p.id]);
+  perform research.purge_refs('research.proposals', array[p.proposal_id]);
   delete from research.document_chunks where document_id = any(docs);
   delete from research.document_versions where document_id = any(docs);
   delete from research.documents where id = any(docs);
@@ -1484,6 +1557,8 @@ begin
     null, 'proposals', 'cancelled');
   select coalesce(array_agg(id), '{}') into docs from research.documents where proposal_id = x.id;
   delete from research.notifications where link = 'proposals/' || x.id;
+  perform research.purge_refs('research.documents', docs);
+  perform research.purge_refs('research.proposals', array[x.id]);
   delete from research.document_chunks where document_id = any(docs);
   delete from research.document_versions where document_id = any(docs);
   delete from research.documents where id = any(docs);
@@ -1522,6 +1597,14 @@ begin
                        from research.closures c where c.project_id = pid order by c.id desc limit 1))));
   elsif act = 'history' then
     return research.ok(jsonb_build_object('items', research.history_items(pid, null, null)));
+  elsif act = 'color' then
+    -- Color para distinguir el proyecto: responsable, quien gestiona el plan o Coordinación. Vacío = color automático.
+    if u.role <> 'coordinator' and not research.can_manage(p, u) then
+      perform research.fail(403, 'Solo el investigador responsable o Coordinación cambian el color.');
+    end if;
+    if coalesce(d ->> 'color', '') <> '' and (d ->> 'color') !~ '^#[0-9A-Fa-f]{6}$' then perform research.fail(422, 'Color no válido.'); end if;
+    update research.projects set color = nullif(lower(d ->> 'color'), '') where id = pid;
+    return research.ok(jsonb_build_object('project_id', pid, 'color', research.project_color_by_id(pid)));
   elsif act = 'update' then
     -- El investigador responsable configura datos y fechas.
     perform research.project_lead(p, u);
@@ -1674,6 +1757,7 @@ create or replace function research.activity_json(a research.activities)
 returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
   select to_jsonb(a) || jsonb_build_object(
+    'project_color', research.project_color_by_id(a.project_id),
     'participant_name', (select name from research.users where id = a.participant_id),
     'project_title', (select title from research.projects where id = a.project_id),
     'deadline_status', research.deadline_status(a.status, a.deadline),
@@ -1711,16 +1795,37 @@ begin
 end $$;
 
 -- Material de apoyo opcional que el responsable adjunta a la actividad.
+-- Material de apoyo: uno (filename/file_base64) o varios a la vez (files: [{filename, file_base64, title}]).
 create or replace function research.activity_material_save(pid integer, aid integer, actor integer, d jsonb)
 returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
-declare did integer;
+declare did integer; f jsonb;
 begin
-  if coalesce(d ->> 'file_base64', '') = '' then return; end if;
-  insert into research.documents (project_id, activity_id, title, kind, created_by)
-    values (pid, aid, coalesce(nullif(regexp_replace(research.req_text(d, 'filename', 255), '\.[^.]+$', ''), ''), 'Material de la actividad'), 'project', actor)
-    returning id into did;
-  perform research.save_version(did, actor, d);
+  for f in select value from jsonb_array_elements(case when jsonb_typeof(d -> 'files') = 'array' then d -> 'files' else jsonb_build_array(d) end) loop
+    continue when coalesce(f ->> 'file_base64', '') = '';
+    insert into research.documents (project_id, activity_id, title, kind, created_by)
+      values (pid, aid, coalesce(nullif(btrim(left(f ->> 'title', 250)), ''),
+        nullif(regexp_replace(research.req_text(f, 'filename', 255), '\.[^.]+$', ''), ''), 'Material de la actividad'), 'project', actor)
+      returning id into did;
+    perform research.save_version(did, actor, f);
+  end loop;
+end $$;
+
+-- Si una actividad termina después de la meta de su hito, el hito se aplaza solo: se avisa una vez por fecha.
+create or replace function research.milestone_postpone_check(aid integer)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare m research.milestones; due date; p research.projects;
+begin
+  select ms.* into m from research.milestones ms join research.milestone_activities ma on ma.milestone_id = ms.id where ma.activity_id = aid limit 1;
+  if m.id is null or m.target_date is null then return; end if;
+  due := research.milestone_due(m.id);
+  if due is null or due <= m.target_date then return; end if;
+  select * into p from research.projects where id = m.project_id;
+  perform research.notify(array(select x from unnest(research.team_ids(p.id)) x where research.can_manage(p, (select us from research.users us where us.id = x))),
+    '📅 El hito «' || left(m.description, 120) || '» se aplazó al ' || to_char(due, 'DD/MM/YYYY'),
+    'Una de sus actividades termina después de la meta (' || to_char(m.target_date, 'DD/MM/YYYY') || '). Proyecto «' || p.title || '».',
+    'projects/' || p.id, 'changes', 'postpone:' || m.id || ':' || due);
 end $$;
 
 create or replace function research.ep_activities(u research.users, act text, d jsonb, is_post boolean)
@@ -1759,9 +1864,9 @@ begin
     perform research.project_manager(p, u);
     uid := research.req_id(d, 'participant_id');
     perform research.participant_valid(pid, uid);
-    v_deadline := research.req_date(d, 'deadline');
+    -- La fecha es opcional y estimada; si se escribe, no puede ser anterior al día en que se crea la actividad.
+    v_deadline := research.opt_date(d, 'deadline');
     if act = 'create' then
-      -- La fecha de entrega no puede ser anterior al día en que se crea la actividad.
       if v_deadline < research.today() then perform research.fail(422, 'La fecha de entrega no puede ser anterior a hoy (' || to_char(research.today(), 'DD/MM/YYYY') || ').'); end if;
       insert into research.activities (project_id, description, participant_id, deadline)
         values (pid, research.req_text(d, 'description', 65535), uid, v_deadline) returning id into eid;
@@ -1771,7 +1876,7 @@ begin
       if v_deadline < (a.created_at at time zone 'America/Mexico_City')::date then
         perform research.fail(422, 'La fecha de entrega no puede ser anterior al día en que se creó la actividad (' || to_char((a.created_at at time zone 'America/Mexico_City')::date, 'DD/MM/YYYY') || ').');
       end if;
-      if v_deadline < research.today() and v_deadline <> a.deadline then
+      if v_deadline < research.today() and v_deadline is distinct from a.deadline then
         perform research.fail(422, 'La nueva fecha de entrega no puede ser anterior a hoy (' || to_char(research.today(), 'DD/MM/YYYY') || ').');
       end if;
       update research.activities set description = research.req_text(d, 'description', 65535), participant_id = uid,
@@ -1779,6 +1884,7 @@ begin
     end if;
     perform research.activity_set_milestone(pid, eid, d);
     perform research.activity_material_save(pid, eid, u.id, d);
+    perform research.milestone_postpone_check(eid);
   elsif act = 'submit' then
     if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
     if a.participant_id <> u.id then perform research.fail(403, 'Solo la persona asignada puede entregar esta actividad.'); end if;
@@ -1813,6 +1919,7 @@ begin
     if a.status = 'cancelled' then perform research.fail(409, 'La actividad está cancelada.'); end if;
     if not (d ? 'milestone_id') then d := d || jsonb_build_object('milestone_id', ''); end if;
     perform research.activity_set_milestone(pid, eid, d);
+    perform research.milestone_postpone_check(eid);
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;
@@ -1829,13 +1936,15 @@ returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
   select to_jsonb(m) || jsonb_build_object(
     'status', research.milestone_status(m.id),
+    'due_date', research.milestone_due(m.id),
+    'postponed', research.milestone_due(m.id) > m.target_date,
     'activity_ids', (select coalesce(jsonb_agg(ma.activity_id order by ma.activity_id), '[]') from research.milestone_activities ma where ma.milestone_id = m.id),
     'activity_count', (select count(*) from research.milestone_activities ma join research.activities a on a.id = ma.activity_id
                        where ma.milestone_id = m.id and a.status <> 'cancelled'),
     'completed_count', (select count(*) from research.milestone_activities ma join research.activities a on a.id = ma.activity_id
                         where ma.milestone_id = m.id and a.status = 'completed'),
     'activities', (select coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'description', a.description, 'status', a.status,
-                     'participant_name', x.name, 'deadline', a.deadline) order by a.deadline), '[]')
+                     'participant_name', x.name, 'deadline', a.deadline) order by a.deadline nulls last), '[]')
                    from research.milestone_activities ma join research.activities a on a.id = ma.activity_id
                    join research.users x on x.id = a.participant_id where ma.milestone_id = m.id));
 $$;
@@ -1857,7 +1966,7 @@ begin
 
   if act = 'list' then
     return research.ok(jsonb_build_object('items', (
-      select coalesce(jsonb_agg(research.milestone_json(y) order by y.target_date, y.id), '[]') from research.milestones y where y.project_id = pid)));
+      select coalesce(jsonb_agg(research.milestone_json(y) order by research.milestone_due(y.id) nulls last, y.id), '[]') from research.milestones y where y.project_id = pid)));
   end if;
 
   perform research.project_active(p);
@@ -1873,16 +1982,16 @@ begin
     if (select count(*) from research.activities where id = any(ids) and project_id = pid) <> cardinality(ids) then
       perform research.fail(422, 'Una de las actividades no pertenece al proyecto.');
     end if;
-    if research.req_date(d, 'target_date') < coalesce(p.start_date, research.today()) then
+    if research.opt_date(d, 'target_date') < coalesce(p.start_date, research.today()) then
       perform research.fail(422, 'La fecha meta no puede ser antes del inicio del proyecto (' || to_char(coalesce(p.start_date, research.today()), 'DD/MM/YYYY') || ').');
     end if;
     if act = 'create' then
       insert into research.milestones (project_id, description, target_date)
-        values (pid, research.req_text(d, 'description', 65535), research.req_date(d, 'target_date')) returning id into eid;
+        values (pid, research.req_text(d, 'description', 65535), research.opt_date(d, 'target_date')) returning id into eid;
     else
       if m.id is null then perform research.fail(404, 'Hito no disponible.'); end if;
       update research.milestones set description = research.req_text(d, 'description', 65535),
-        target_date = research.req_date(d, 'target_date') where id = eid;
+        target_date = research.opt_date(d, 'target_date') where id = eid;
       if d ? 'activity_ids' then delete from research.milestone_activities where milestone_id = eid; end if;
     end if;
     if d ? 'activity_ids' then
@@ -1978,7 +2087,7 @@ begin
                        order by t.is_active desc, x.name), '[]')
                      from research.participants t join research.users x on x.id = t.user_id where t.project_id = pid),
     'activities', (select coalesce(jsonb_agg(research.activity_json(a) order by a.deadline), '[]') from research.activities a where a.project_id = pid),
-    'milestones', (select coalesce(jsonb_agg(research.milestone_json(m) - 'activities' order by m.target_date), '[]') from research.milestones m where m.project_id = pid),
+    'milestones', (select coalesce(jsonb_agg(research.milestone_json(m) - 'activities' order by research.milestone_due(m.id) nulls last), '[]') from research.milestones m where m.project_id = pid),
     'documents', (select coalesce(jsonb_agg(jsonb_build_object('title', dd.title, 'kind', dd.kind,
                     'version', (select max(version) from research.document_versions v where v.document_id = dd.id)) order by dd.id), '[]')
                   from research.documents dd where dd.project_id = pid and dd.deleted_at is null),
@@ -2006,6 +2115,44 @@ begin
     reports := reports || research.project_report(u, research.req_id(jsonb_build_object('id', e), 'id'));
   end loop;
   return research.ok(jsonb_build_object('generated_at', now(), 'generated_by', u.name, 'projects', reports));
+end $$;
+
+-- ------------------------------------------------------------------
+-- Calendario: actividades y hitos con fecha en un rango, más las actividades abiertas sin fecha.
+-- scope = 'mine' (mis actividades) o 'all' (todo lo de los proyectos que puedo ver).
+-- ------------------------------------------------------------------
+create or replace function research.ep_calendar(u research.users, act text, d jsonb)
+returns jsonb language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare v_from date; v_to date; v_scope text := coalesce(d ->> 'scope', 'mine'); vis integer[];
+begin
+  if act <> 'list' then perform research.fail(404, 'Operación no disponible.'); end if;
+  v_from := coalesce(research.opt_date(d, 'from'), date_trunc('month', research.today())::date - 7);
+  v_to := coalesce(research.opt_date(d, 'to'), v_from + 49);
+  if v_to < v_from or v_to - v_from > 200 then perform research.fail(422, 'Rango de fechas no válido.'); end if;
+  select coalesce(array_agg(p.id), '{}') into vis from research.projects p
+    where research.project_visible(u, p.id) and p.status <> 'cancelled';
+  return research.ok(jsonb_build_object(
+    'activities', (select coalesce(jsonb_agg(research.activity_brief(a) || jsonb_build_object(
+                     'participant_id', a.participant_id,
+                     'milestone', (select m.description from research.milestone_activities ma join research.milestones m on m.id = ma.milestone_id where ma.activity_id = a.id limit 1))
+                     order by a.deadline, a.id), '[]')
+                   from research.activities a
+                   where a.project_id = any(vis) and a.status <> 'cancelled' and a.deadline between v_from and v_to
+                     and (v_scope = 'all' or a.participant_id = u.id)),
+    'milestones', (select coalesce(jsonb_agg(jsonb_build_object('id', m.id, 'description', m.description, 'project_id', m.project_id,
+                     'project_title', p.title, 'project_color', research.project_color(p), 'due_date', research.milestone_due(m.id),
+                     'status', m.status) order by research.milestone_due(m.id)), '[]')
+                   from research.milestones m join research.projects p on p.id = m.project_id
+                   where m.project_id = any(vis) and research.milestone_due(m.id) between v_from and v_to
+                     and (v_scope = 'all' or exists (select 1 from research.participants t where t.project_id = m.project_id and t.user_id = u.id and t.is_active = 1))),
+    'undated', (select coalesce(jsonb_agg(research.activity_brief(a) order by a.id), '[]')
+                from research.activities a join research.projects p on p.id = a.project_id
+                where a.project_id = any(vis) and a.deadline is null and a.status in ('pending', 'changes', 'in_review')
+                  and p.status in ('active', 'changes', 'closing') and (v_scope = 'all' or a.participant_id = u.id)),
+    'projects', (select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'color', research.project_color(p), 'status', p.status) order by p.title), '[]')
+                 from research.projects p where p.id = any(vis)),
+    'from', v_from, 'to', v_to, 'today', research.today()));
 end $$;
 
 -- >>>>>>>>>> 05_documentos.sql
@@ -2567,7 +2714,7 @@ returns text language sql immutable as $$
     when 'dashboard/summary' then 'GET'
     when 'projects/list' then 'GET' when 'projects/detail' then 'GET' when 'projects/history' then 'GET'
     when 'projects/update' then 'POST' when 'projects/change-researcher' then 'POST'
-    when 'projects/cancel' then 'POST' when 'projects/reopen' then 'POST' when 'projects/delete' then 'POST' when 'projects/delete-impact' then 'GET'
+    when 'projects/cancel' then 'POST' when 'projects/reopen' then 'POST' when 'projects/delete' then 'POST' when 'projects/color' then 'POST' when 'calendar/list' then 'GET' when 'projects/delete-impact' then 'GET'
     when 'participants/add' then 'POST' when 'participants/update' then 'POST' when 'participants/remove' then 'POST'
     when 'participants/permissions' then 'POST'
     when 'activities/list' then 'GET' when 'activities/detail' then 'GET'
@@ -2638,6 +2785,7 @@ begin
       when m = 'participants' then research.ep_participants(u, a, d, is_post)
       when m = 'activities' then research.ep_activities(u, a, d, is_post)
       when m = 'milestones' then research.ep_milestones(u, a, d, is_post)
+      when m = 'calendar' then research.ep_calendar(u, a, d)
       when m = 'closures' then research.ep_closures(u, a, d, is_post)
       when m in ('documents', 'evidence', 'institutional-documents') then research.ep_documents(u, m, a, d, is_post)
       when m = 'reports' then research.ep_reports(u, a, d)
@@ -3105,7 +3253,7 @@ begin
     select * into a from research.activities where id = new.entity_id;
     if new.action in ('create', 'reassign') and a.participant_id <> new.actor_id then
       perform research.notify(array[a.participant_id], 'Nueva actividad asignada: ' || left(a.description, 120),
-        'Proyecto «' || t || '» · vence el ' || to_char(a.deadline, 'DD/MM/YYYY'), 'activities/' || a.id, 'progress');
+        'Proyecto «' || t || '» · ' || coalesce('fecha estimada ' || to_char(a.deadline, 'DD/MM/YYYY'), 'sin fecha estimada'), 'activities/' || a.id, 'progress');
     elsif new.action = 'submit' then
       perform research.notify(array_remove(array[p.responsible_researcher_id], new.actor_id), 'Entrega por revisar: ' || left(a.description, 120),
         (select name from research.users where id = new.actor_id) || ' la entregó en «' || t || '».', 'activities/' || a.id, 'progress');
@@ -3211,15 +3359,34 @@ set search_path = research, extensions, pg_temp as $$
 declare a record;
 begin
   if act = 'list' then
-    -- Recordatorios de fechas límite (una sola vez por actividad).
-    for a in select x.id, x.description, x.deadline, pr.title from research.activities x join research.projects pr on pr.id = x.project_id
+    -- Recordatorios (una vez por actividad y por fecha; si la fecha cambia, vuelven a avisar):
+    -- 3 días antes, el mismo día y, pasados 3 días de tolerancia, que se considera retrasada.
+    for a in select x.id, x.description, x.deadline, pr.title, x.deadline - research.today() dias
+             from research.activities x join research.projects pr on pr.id = x.project_id
              where x.participant_id = u.id and x.status in ('pending', 'changes') and pr.status in ('active', 'changes')
-               and x.deadline <= current_date + 2 loop
-      perform research.notify(array[u.id],
-        case when a.deadline < current_date then '⚠ Actividad retrasada: ' else '⏰ Vence pronto: ' end || left(a.description, 120),
-        'Proyecto «' || a.title || '» · fecha límite ' || to_char(a.deadline, 'DD/MM/YYYY'), 'activities/' || a.id,
-        case when a.deadline < current_date then 'cancelled' else 'progress' end,
-        case when a.deadline < current_date then 'late:' else 'due:' end || a.id);
+               and x.deadline is not null and x.deadline <= research.today() + 3 loop
+      if a.dias between 1 and 3 then
+        perform research.notify(array[u.id], '⏰ Faltan ' || a.dias || case when a.dias = 1 then ' día' else ' días' end || ': ' || left(a.description, 120),
+          'Proyecto «' || a.title || '» · fecha estimada ' || to_char(a.deadline, 'DD/MM/YYYY') || '. Si terminas antes, puedes entregarla ya.',
+          'activities/' || a.id, 'progress', 'due3:' || a.id || ':' || a.deadline);
+      elsif a.dias = 0 then
+        perform research.notify(array[u.id], '📅 Hoy es la fecha estimada: ' || left(a.description, 120),
+          'Proyecto «' || a.title || '». Si necesitas más tiempo, avisa a tu investigador para ajustar la fecha.',
+          'activities/' || a.id, 'progress', 'today:' || a.id || ':' || a.deadline);
+      elsif a.dias < -3 then
+        perform research.notify(array[u.id], '⚠ Actividad retrasada: ' || left(a.description, 120),
+          'Proyecto «' || a.title || '» · la fecha estimada era el ' || to_char(a.deadline, 'DD/MM/YYYY') || '.',
+          'activities/' || a.id, 'cancelled', 'late:' || a.id || ':' || a.deadline);
+      end if;
+    end loop;
+    -- A quien gestiona el proyecto: actividades de su equipo que ya pasaron la tolerancia.
+    for a in select x.id, x.description, x.deadline, pr.title, us.name who
+             from research.activities x join research.projects pr on pr.id = x.project_id join research.users us on us.id = x.participant_id
+             where pr.responsible_researcher_id = u.id and x.participant_id <> u.id and x.status in ('pending', 'changes')
+               and pr.status in ('active', 'changes') and x.deadline < research.today() - 3 loop
+      perform research.notify(array[u.id], '⚠ Retrasada: ' || left(a.description, 120),
+        a.who || ' · proyecto «' || a.title || '» · fecha estimada ' || to_char(a.deadline, 'DD/MM/YYYY') || '. Puedes ajustar la fecha si hace falta.',
+        'activities/' || a.id, 'cancelled', 'latelead:' || a.id || ':' || a.deadline);
     end loop;
     return research.ok(jsonb_build_object(
       'unread', (select count(*) from research.notifications where user_id = u.id and read_at is null),
@@ -3236,3 +3403,19 @@ begin
   perform research.fail(404, 'Operación no disponible.');
   return null;
 end $$;
+
+-- ------------------------------------------------------------------
+-- Limpieza de lo que se acumula y ya no sirve (corre al instalar y, de vez en cuando, al iniciar sesión).
+-- ------------------------------------------------------------------
+create or replace function research.housekeeping()
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+begin
+  delete from research.user_sessions where revoked_at < now() - interval '7 days' or expires_at < now() - interval '7 days';
+  delete from research.password_resets where created_at < now() - interval '7 days';
+  delete from research.notifications where read_at < now() - interval '6 months';
+end $$;
+select research.housekeeping();
+
+-- Último resultado que muestra el SQL Editor: si ves esta fila, todo se instaló bien.
+select 'Listo: la base de datos quedó actualizada y limpia.' as resultado;

@@ -22,7 +22,7 @@ returns text language sql immutable as $$
     when 'title' then 'Título' when 'description' then 'Descripción' when 'objectives' then 'Objetivos'
     when 'observations' then 'Observaciones' when 'decision' then 'Decisión' when 'name' then 'Nombre'
     when 'username' then 'Usuario' when 'password' then 'Contraseña' when 'role' then 'Rol'
-    when 'status' then 'Estado' when 'deadline' then 'Fecha límite' when 'target_date' then 'Fecha objetivo'
+    when 'status' then 'Estado' when 'deadline' then 'Fecha estimada' when 'target_date' then 'Fecha meta'
     when 'start_date' then 'Fecha de inicio' when 'end_date' then 'Fecha de término'
     when 'filename' then 'Archivo' when 'question' then 'Pregunta' when 'project_role' then 'Rol en el proyecto'
     when 'reason' then 'Motivo' when 'comment' then 'Comentario' when 'email' then 'Correo' when 'justification' then 'Justificación' when 'note' then 'Nota'
@@ -182,6 +182,8 @@ begin
     values (u.id, research.sha256(token), now() + interval '30 minutes');
   -- Limpieza de sesiones viejas del mismo usuario.
   delete from research.user_sessions where user_id = u.id and (revoked_at is not null or expires_at < now() - interval '7 days');
+  -- De vez en cuando (1 de cada 20 inicios de sesión) se limpia lo viejo de todos.
+  if random() < 0.05 then perform research.housekeeping(); end if;
   return research.ok(jsonb_build_object('message', 'Inicio de sesión correcto.', 'user', research.public_user(u), 'token', token));
 end $$;
 
@@ -332,13 +334,27 @@ set search_path = research, extensions, pg_temp as $$
   values (pid, actor, entity, eid, act, details::text);
 $$;
 
+-- Las fechas son ESTIMADAS: hay 3 días de tolerancia antes de marcar una actividad como retrasada.
 create or replace function research.deadline_status(st text, deadline date)
-returns text language sql stable as $$
+returns text language sql stable
+set search_path = research, extensions, pg_temp as $$
   select case when st = 'completed' then 'Completada'
               when st = 'cancelled' then 'Cancelada'
-              when deadline < current_date then 'Retrasada'
-              when deadline <= current_date + 3 then 'Próxima a vencer'
+              when deadline is null then 'Sin fecha'
+              when deadline < research.today() - 3 then 'Retrasada'
+              when deadline < research.today() then 'Fecha pasada'
+              when deadline = research.today() then 'Vence hoy'
+              when deadline <= research.today() + 3 then 'Próxima a vencer'
               else 'Normal' end;
+$$;
+
+-- Fecha del hito: la meta escrita o, si alguna actividad termina después, la fecha más lejana de sus actividades.
+create or replace function research.milestone_due(mid integer)
+returns date language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select greatest((select target_date from research.milestones where id = mid),
+    (select max(a.deadline) from research.milestone_activities ma join research.activities a on a.id = ma.activity_id
+     where ma.milestone_id = mid and a.status <> 'cancelled'));
 $$;
 
 -- Un hito se alcanza solo: cuando todas sus actividades (no canceladas) están completadas.
@@ -351,20 +367,33 @@ set search_path = research, extensions, pg_temp as $$
 $$;
 
 -- Resumen de un proyecto (para listas, seguimiento y reportes). Las actividades canceladas no cuentan.
+-- Color del proyecto: el elegido o, si no hay, uno fijo de la paleta según su número.
+create or replace function research.project_color(p research.projects)
+returns text language sql immutable
+set search_path = research, extensions, pg_temp as $$
+  select coalesce(p.color, (array['#2F80ED','#9B51E0','#E2557A','#F2994A','#219653','#00A3A3','#6C63FF','#C27C0E','#3D7EA6','#B5487E'])[(p.id % 10) + 1]);
+$$;
+create or replace function research.project_color_by_id(pid integer)
+returns text language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select research.project_color(p) from research.projects p where p.id = pid;
+$$;
+
 create or replace function research.project_json(p research.projects)
 returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
   select to_jsonb(p) || jsonb_build_object(
     'researcher_name', (select name from research.users where id = p.responsible_researcher_id),
     'proposal_title', (select title from research.proposals where id = p.proposal_id),
+    'color', research.project_color(p),
     'total_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status <> 'cancelled'),
     'completed_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status = 'completed'),
-    'overdue_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status not in ('completed','cancelled') and a.deadline < current_date),
+    'overdue_activities', (select count(*) from research.activities a where a.project_id = p.id and a.status not in ('completed','cancelled') and a.deadline < research.today() - 3),
     'total_milestones', (select count(*) from research.milestones m where m.project_id = p.id),
     'achieved_milestones', (select count(*) from research.milestones m where m.project_id = p.id and research.milestone_status(m.id) = 'achieved'),
-    'next_milestone', (select jsonb_build_object('description', m.description, 'target_date', m.target_date)
+    'next_milestone', (select jsonb_build_object('description', m.description, 'target_date', research.milestone_due(m.id))
                        from research.milestones m where m.project_id = p.id and research.milestone_status(m.id) = 'pending'
-                       order by m.target_date limit 1),
+                       order by research.milestone_due(m.id) nulls last limit 1),
     'active_participants', (select count(*) from research.participants t where t.project_id = p.id and t.is_active = 1)
   );
 $$;

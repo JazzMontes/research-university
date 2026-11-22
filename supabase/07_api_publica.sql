@@ -26,7 +26,7 @@ returns text language sql immutable as $$
     when 'dashboard/summary' then 'GET'
     when 'projects/list' then 'GET' when 'projects/detail' then 'GET' when 'projects/history' then 'GET'
     when 'projects/update' then 'POST' when 'projects/change-researcher' then 'POST'
-    when 'projects/cancel' then 'POST' when 'projects/reopen' then 'POST' when 'projects/delete' then 'POST' when 'projects/delete-impact' then 'GET'
+    when 'projects/cancel' then 'POST' when 'projects/reopen' then 'POST' when 'projects/delete' then 'POST' when 'projects/color' then 'POST' when 'calendar/list' then 'GET' when 'projects/delete-impact' then 'GET'
     when 'participants/add' then 'POST' when 'participants/update' then 'POST' when 'participants/remove' then 'POST'
     when 'participants/permissions' then 'POST'
     when 'activities/list' then 'GET' when 'activities/detail' then 'GET'
@@ -97,6 +97,7 @@ begin
       when m = 'participants' then research.ep_participants(u, a, d, is_post)
       when m = 'activities' then research.ep_activities(u, a, d, is_post)
       when m = 'milestones' then research.ep_milestones(u, a, d, is_post)
+      when m = 'calendar' then research.ep_calendar(u, a, d)
       when m = 'closures' then research.ep_closures(u, a, d, is_post)
       when m in ('documents', 'evidence', 'institutional-documents') then research.ep_documents(u, m, a, d, is_post)
       when m = 'reports' then research.ep_reports(u, a, d)

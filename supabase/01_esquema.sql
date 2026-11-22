@@ -58,9 +58,6 @@ create table if not exists research.proposals (
   author_id                   integer not null references research.users(id),
   responsible_researcher_id   integer not null references research.users(id),
   status                      varchar(50) not null,
-  is_archived                 smallint not null default 0,
-  status_before_archive       varchar(50),
-  correction_pending_resubmit smallint not null default 0,
   created_at                  timestamptz not null default now(),
   updated_at                  timestamptz not null default now()
 );
@@ -156,7 +153,6 @@ create table if not exists research.documents (
   activity_id integer references research.activities(id),
   title       varchar(250) not null,
   kind        varchar(20) not null check (kind in ('project','evidence','institutional')),
-  blocked     smallint not null default 0,
   restricted  smallint not null default 0,
   created_by  integer references research.users(id),
   deleted_at  timestamptz,
@@ -264,16 +260,20 @@ update research.proposals set status = 'changes_requested', returns_to = 'pendin
 update research.proposals set status = 'changes_requested', returns_to = 'pending_coordinator'
   where status = 'changes_requested_evaluator';
 update research.proposals set status = 'pending_coordinator' where status = 'under_evaluation';
--- Las archivadas pasan a "Cancelada" y se pueden reactivar.
-update research.proposals set
-    status_before_cancel = case coalesce(status_before_archive, status)
-      when 'changes_requested_researcher' then 'pending_researcher_review'
-      when 'changes_requested_evaluator' then 'pending_coordinator'
-      when 'under_evaluation' then 'pending_coordinator'
-      when 'changes_requested' then coalesce(returns_to, 'pending_coordinator')
-      else coalesce(status_before_archive, status) end,
-    status = 'cancelled', is_archived = 0, status_before_archive = null
-  where is_archived = 1;
+-- Las archivadas (v2) pasan a "Cancelada" y se pueden reactivar. Solo si la base todavía tiene esas columnas.
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_schema = 'research' and table_name = 'proposals' and column_name = 'is_archived') then
+    execute $q$update research.proposals set
+        status_before_cancel = case coalesce(status_before_archive, status)
+          when 'changes_requested_researcher' then 'pending_researcher_review'
+          when 'changes_requested_evaluator' then 'pending_coordinator'
+          when 'under_evaluation' then 'pending_coordinator'
+          when 'changes_requested' then coalesce(returns_to, 'pending_coordinator')
+          else coalesce(status_before_archive, status) end,
+        status = 'cancelled', is_archived = 0, status_before_archive = null
+      where is_archived = 1$q$;
+  end if;
+end $$;
 
 -- Actividades: ya no existe el paso "Comenzar".
 update research.activities set status = case when observations is not null and btrim(observations) <> '' then 'changes' else 'pending' end
@@ -345,6 +345,13 @@ create table if not exists research.deleted_items (
 );
 alter table research.deleted_items enable row level security;
 
+-- Fechas estimadas y opcionales: una actividad puede no tener fecha, y la fecha del hito se calcula
+-- con la más lejana de sus actividades (la fecha que se escribe en el hito es solo la meta original).
+alter table research.activities alter column deadline drop not null;
+-- Color para distinguir cada proyecto en toda la app (si está vacío se usa uno de la paleta).
+alter table research.projects add column if not exists color varchar(7);
+alter table research.milestones alter column target_date drop not null;
+
 -- Ajuste de fechas de proyectos existentes (va al final porque usa la tabla de cierres).
 update research.projects set start_date = (created_at at time zone 'America/Mexico_City')::date
   where start_date is distinct from (created_at at time zone 'America/Mexico_City')::date;
@@ -353,3 +360,16 @@ update research.projects p set finished_on = coalesce(
     (p.updated_at at time zone 'America/Mexico_City')::date)
   where p.status in ('finalized', 'cancelled') and p.finished_on is null;
 update research.projects set end_date = null where end_date is not null and end_date < start_date;
+
+-- =====================================================================
+-- Limpieza: lo que dejó la versión 2 y ya no usa nada (rol de evaluador y "archivar").
+-- Las propuestas archivadas ya se convirtieron arriba; el historial de cada propuesta conserva sus eventos.
+-- =====================================================================
+drop table if exists research.evaluations cascade;
+drop table if exists research.evaluation_assignments cascade;
+drop table if exists research.proposal_reviews cascade;
+alter table research.proposals drop column if exists is_archived;
+alter table research.proposals drop column if exists status_before_archive;
+alter table research.proposals drop column if exists correction_pending_resubmit;
+alter table research.documents drop column if exists blocked;
+

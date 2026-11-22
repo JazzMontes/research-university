@@ -560,6 +560,7 @@ set search_path = research, extensions, pg_temp as $$
   select jsonb_build_object('id', a.id, 'description', a.description, 'status', a.status, 'deadline', a.deadline,
     'deadline_status', research.deadline_status(a.status, a.deadline), 'project_id', a.project_id,
     'project_title', (select title from research.projects where id = a.project_id),
+    'project_color', research.project_color_by_id(a.project_id),
     'participant_name', (select name from research.users where id = a.participant_id));
 $$;
 
@@ -615,7 +616,7 @@ begin
         select a.status, count(*) total from research.activities a join research.projects p on p.id = a.project_id
         where a.project_id = any(vis) and a.status <> 'cancelled' and p.status <> 'cancelled' group by a.status) s),
     'overdue', (select count(*) from research.activities a join research.projects p on p.id = a.project_id
-        where a.project_id = any(vis) and a.status in ('pending', 'changes', 'in_review') and a.deadline < current_date and p.status in ('active', 'changes')),
+        where a.project_id = any(vis) and a.status in ('pending', 'changes', 'in_review') and a.deadline < research.today() - 3 and p.status in ('active', 'changes')),
     'progress', (select coalesce(jsonb_agg(x order by (x ->> 'percent')::int desc, x ->> 'title'), '[]') from (
         select jsonb_build_object('id', p.id, 'title', p.title, 'status', p.status,
           'percent', case when count(a.id) = 0 then 0 else round(100.0 * count(a.id) filter (where a.status = 'completed') / count(a.id)) end,

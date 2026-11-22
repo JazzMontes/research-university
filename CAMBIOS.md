@@ -145,7 +145,20 @@ Pendiente → Entregar → En revisión → Aceptar (**Completada**) o Pedir cam
 - **Fechas del proyecto**: inicia el día en que se aprobó la propuesta (ya no se edita; los proyectos existentes se ajustan solos). El **término estimado** es opcional y se puede cambiar; el **término real** se marca solo al completarse o cancelarse el proyecto (y se borra si se reabre).
 - **Eliminar usuarios sin bloqueos**: si la cuenta tiene trabajo pendiente, la app lo muestra y lo traspasa en lugar de impedirlo. Sus proyectos en curso y las propuestas que tenía por revisar pasan al investigador que elijas en la misma ventana. Sus actividades sin terminar pasan al responsable de cada proyecto. Sus propias propuestas en trámite se cancelan y sus solicitudes pendientes se cierran.
 - **Eliminar por completo**: Coordinación puede eliminar un proyecto (con su propuesta, actividades, hitos, documentos, evidencias e historial) desde su Resumen. El autor puede eliminar su propia propuesta mientras no sea proyecto; Coordinación puede eliminar cualquiera. Se confirma escribiendo ELIMINAR, se avisa a las personas afectadas y queda un registro interno de qué se eliminó, quién y cuándo.
+- **Limpieza de la base**: se borran las tablas y columnas que dejó la versión 2 y ya no usa nada (evaluaciones, asignaciones de evaluador, revisiones viejas, «archivar» y documentos bloqueados). Las propuestas archivadas se convierten antes a «Cancelada». Además se limpian solas las sesiones vencidas, los códigos de recuperación viejos y los avisos leídos hace más de 6 meses.
+- Corrección: eliminar propuestas o proyectos antiguos (de la versión 2) daba «El registro está relacionado con otro…» por las tablas viejas de evaluaciones; ahora se limpian también.
 - Corrección: una instalación desde cero de `instalar_todo.sql` ya no falla por el ajuste de fechas de proyectos.
 - Los buscadores ya no dicen «(se actualiza mientras escribes)».
 - Corrección: la recuperación de contraseña ahora sí muestra en pantalla «No hay ninguna cuenta registrada con ese correo» (y los demás avisos de error).
 - Requiere ejecutar `supabase/instalar_todo.sql` y publicar de nuevo la función `asistente`.
+
+## Versión 3.15
+
+- **Varios archivos a la vez**: en Documentos, Evidencias y Material de apoyo se pueden elegir (o arrastrar) varios archivos juntos. Cada uno se sube por separado con su propio título y se ve el avance («Subiendo 2 de 5…»).
+- **Título automático**: el título se llena solo con el nombre del archivo (sin la extensión) y se puede editar.
+- **Fechas estimadas y opcionales**: las actividades y los hitos pueden no tener fecha. Si la tienen, es aproximada: se avisa 3 días antes y el mismo día, y hay 3 días de tolerancia antes de marcarla como «Retrasada» (antes de eso dice «Fecha pasada»).
+- **El hito se aplaza solo**: su fecha es la más lejana entre su meta y sus actividades. Si alguna actividad termina después, el hito se recorre, se marca «se aplazó (meta original …)» y se avisa a quien gestiona el plan.
+- **Calendario**: sección nueva en el menú, con el mes en grande y las actividades y hitos de cada proyecto en su color. Las completadas salen tachadas, las retrasadas en rojo y las que están en revisión punteadas. Se puede ver «Mis actividades» o todo el equipo, ocultar proyectos, ver lo de cada día y las actividades sin fecha. En celular se muestran puntos de color.
+- **Color por proyecto**: se elige con el círculo junto al título del proyecto (10 colores o uno personalizado). Tiñe el encabezado, las pestañas, los hitos y las barras del proyecto y de sus actividades. También aparece en la lista de proyectos, en Inicio y en el calendario.
+- Requiere ejecutar `supabase/instalar_todo.sql`.
+

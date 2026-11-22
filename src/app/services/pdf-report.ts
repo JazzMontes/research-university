@@ -319,13 +319,13 @@ export function createReportPdf(data: Row, t: ReportLabels): { bytes: Uint8Array
     const activityRows = (items: Row[]) => items.map((a: Row) => {
       const s = t.activityStatus(a.status);
       const late = a.deadline_status === 'Retrasada' ? ' (retrasada)' : '';
-      return { cells: [a.description, a.participant_name || '', t.date(a.deadline) + late, s.label], tones: [null, null, null, s.tone] };
+      return { cells: [a.description, a.participant_name || '', (a.deadline ? t.date(a.deadline) : 'Sin fecha') + late, s.label], tones: [null, null, null, s.tone] };
     });
     const cols = [{ title: 'Actividad', width: 42 }, { title: 'Responsable', width: 22 }, { title: 'Fecha límite', width: 15 }, { title: 'Estado', width: 21 }];
     for (const m of milestones) {
       const s = t.milestoneStatus(m.status);
       pdf.ensure(70);
-      pdf.paragraph(`Hito: ${m.description}  ·  meta ${t.date(m.target_date)}  ·  ${m.completed_count ?? 0} de ${m.activity_count ?? 0} completadas  ·  ${s.label}`, 10, GREEN, 'F2');
+      pdf.paragraph(`Hito: ${m.description}  ·  meta ${t.date(m.due_date ?? m.target_date)}${m.postponed ? ' (aplazado)' : ''}  ·  ${m.completed_count ?? 0} de ${m.activity_count ?? 0} completadas  ·  ${s.label}`, 10, GREEN, 'F2');
       pdf.table(cols, activityRows(activities.filter(a => Number(a.milestone_id) === Number(m.id))), 'Este hito todavía no tiene actividades.');
     }
     const loose = activities.filter(a => !a.milestone_id);

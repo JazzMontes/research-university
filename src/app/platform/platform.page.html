@@ -117,7 +117,7 @@
         <button class="logout" type="button" (click)="logout()" [disabled]="logoutBusy"><app-icon name="logout"></app-icon>{{ logoutBusy ? 'Cerrando sesión…' : 'Cerrar sesión' }}</button>
       </aside>
       @if (menuOpen) { <button type="button" class="scrim" aria-label="Cerrar menú" (click)="menuOpen = false"></button> }
-      <main>
+      <main [style.--pc]="pageColor || null" [class.has-pc]="!!pageColor">
         <header class="topbar">
           <button type="button" class="menu-button" (click)="menuOpen = !menuOpen" aria-label="Abrir menú" [attr.aria-expanded]="menuOpen"><app-icon name="menu" [size]="22"></app-icon></button>
           <span class="breadcrumb">{{ sectionTitle }}</span>
@@ -259,9 +259,9 @@
               <h3><app-icon name="tasks"></app-icon>Mis actividades</h3>
               <div class="scroll-box short">
                 @for (a of dash['my_activities'] || []; track a.id) {
-                  <a class="list-row" [routerLink]="['/app/activities', a.id]">
-                    <div><strong>{{ a.description }}</strong><small>{{ a.project_title }} · vence {{ date(a.deadline) }}</small></div>
-                    @if (a.deadline_status !== 'Normal') { <span class="badge" [class]="'badge tone-' + deadlineTone(a.deadline_status)">{{ a.deadline_status }}</span> }
+                  <a class="list-row" [routerLink]="['/app/activities', a.id]"><span class="pdot" [style.background]="a.project_color" aria-hidden="true"></span>
+                    <div><strong>{{ a.description }}</strong><small>{{ a.project_title }} · {{ dueText(a.deadline) }}</small></div>
+                    @if (showDeadlineBadge(a.deadline_status)) { <span class="badge" [class]="'badge tone-' + deadlineTone(a.deadline_status)">{{ a.deadline_status }}</span> }
                     <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
                   </a>
                 } @empty { <p class="muted">No tienes actividades pendientes. ¡Estás al día!</p> }
@@ -272,7 +272,7 @@
                 <h3><app-icon name="review"></app-icon>Entregas por revisar</h3>
                 <div class="scroll-box short">
                   @for (a of dash['to_review'] || []; track a.id) {
-                    <a class="list-row" [routerLink]="['/app/activities', a.id]">
+                    <a class="list-row" [routerLink]="['/app/activities', a.id]"><span class="pdot" [style.background]="a.project_color" aria-hidden="true"></span>
                       <div><strong>{{ a.description }}</strong><small>{{ a.participant_name }} · {{ a.project_title }}</small></div>
                       <span class="badge tone-progress">Revisar</span>
                     </a>
@@ -282,7 +282,7 @@
                 <h3><app-icon name="clock"></app-icon>Próximas fechas límite</h3>
                 <div class="scroll-box short">
                   @for (a of dash['charts']?.upcoming || []; track a.id) {
-                    <a class="list-row" [routerLink]="['/app/activities', a.id]">
+                    <a class="list-row" [routerLink]="['/app/activities', a.id]"><span class="pdot" [style.background]="a.project_color" aria-hidden="true"></span>
                       <div><strong>{{ a.description }}</strong><small>{{ a.project_title }}</small></div>
                       <span class="badge tone-progress">{{ date(a.deadline) }}</span>
                     </a>
@@ -403,12 +403,12 @@
           <div class="filters"><span class="search-icon"><app-icon name="search"></app-icon></span><input type="search" aria-label="Buscar proyecto" [(ngModel)]="search" placeholder="Buscar por título o responsable"><span>{{ visibleProjects.length }} resultados</span></div>
           <div class="record-cards scroll-box">
             @for (p of visibleProjects; track p.id) {
-              <a class="record-card" [routerLink]="['/app/projects', p.id]">
-                <div><h2>{{ p.title }}</h2><p>Responsable: {{ p.researcher_name }}</p>
+              <a class="record-card colored" [style.--pc]="p.color" [routerLink]="['/app/projects', p.id]">
+                <div><h2><span class="pdot big" [style.background]="p.color" aria-hidden="true"></span>{{ p.title }}</h2><p>Responsable: {{ p.researcher_name }}</p>
                   <div class="progress-line"><progress max="100" [value]="percent(p)"></progress><span>{{ percent(p) }} %</span></div>
                   <small>{{ p.completed_activities }} de {{ p.total_activities }} actividades
                     @if (+p.overdue_activities) { · <span class="late">{{ p.overdue_activities }} retrasada(s)</span> }
-                    @if (p.next_milestone) { · Próximo hito: {{ p.next_milestone.description }} ({{ date(p.next_milestone.target_date) }}) }</small></div>
+                    @if (p.next_milestone) { · Próximo hito: {{ p.next_milestone.description }} ({{ p.next_milestone.target_date ? date(p.next_milestone.target_date) : 'sin fecha' }}) }</small></div>
                 <span class="badge" [class]="'badge tone-' + status('project', p.status).tone">{{ status('project', p.status).label }}</span>
               </a>
             } @empty { <div class="empty">No hay proyectos con este filtro.</div> }
@@ -416,7 +416,22 @@
 
         } @else if (section === 'projects' && project) {
           <a class="back" routerLink="/app/projects"><app-icon name="back"></app-icon>Proyectos</a>
-          <div class="heading"><div><h1>{{ project['title'] }}</h1><p>Responsable: {{ project['researcher_name'] }}</p></div>
+          <div class="heading project-heading"><div><h1>
+              @if (canColorProject) {
+                <span class="color-pick">
+                  <button type="button" class="color-dot" [style.background]="project['color']" (click)="colorMenu = !colorMenu" aria-label="Cambiar el color del proyecto" title="Color del proyecto"></button>
+                  @if (colorMenu) {
+                    <span class="color-menu" role="dialog" aria-label="Color del proyecto">
+                      <small>Color del proyecto</small>
+                      <span class="swatches">
+                        @for (c of projectPalette; track c) { <button type="button" [style.background]="c" [class.current]="c === project['color']" (click)="setProjectColor(c)" [attr.aria-label]="'Usar ' + c"></button> }
+                      </span>
+                      <label class="custom-color">Otro color <input type="color" [value]="project['color']" (change)="setProjectColor($any($event.target).value)"></label>
+                    </span>
+                  }
+                </span>
+              } @else { <span class="color-dot static" [style.background]="project['color']" aria-hidden="true"></span> }
+              {{ project['title'] }}</h1><p>Responsable: {{ project['researcher_name'] }}</p></div>
             <span class="badge big" [class]="'badge big tone-' + status('project', project['status']).tone">{{ status('project', project['status']).label }}</span></div>
 
           @if (project['status'] === 'changes') {
@@ -540,7 +555,8 @@
                       <span class="milestone-flag" [class]="'milestone-flag tone-' + status('milestone', g.milestone.status).tone"><app-icon [name]="g.milestone.status === 'achieved' ? 'flag-done' : 'flag'"></app-icon></span>
                       <div class="milestone-info">
                         <strong>{{ g.milestone.description }}</strong>
-                        <small><app-icon name="calendar" [size]="13"></app-icon> Meta {{ date(g.milestone.target_date) }} · {{ g.milestone.completed_count }} de {{ g.milestone.activity_count }} completadas</small>
+                        <small><app-icon name="calendar" [size]="13"></app-icon> {{ g.milestone.due_date ? 'Meta ' + date(g.milestone.due_date) : 'Sin fecha' }}
+                          @if (g.milestone.postponed) { <span class="postponed" title="Una actividad termina después de la meta original">(se aplazó; meta original {{ date(g.milestone.target_date) }})</span> } · {{ g.milestone.completed_count }} de {{ g.milestone.activity_count }} completadas</small>
                         <span class="bar small-bar"><span class="bar-fill" [style.width.%]="milestonePercent(g.milestone)"></span></span>
                       </div>
                       <span class="badge" [class]="'badge tone-' + status('milestone', g.milestone.status).tone">{{ status('milestone', g.milestone.status).label }}</span>
@@ -563,10 +579,10 @@
                       [class.draggable]="canManagePlan && projectEditable && a.status !== 'cancelled'" [class.is-dragging]="dragActivity === +a.id"
                       (dragstart)="onDragStart(a, $event)" (dragend)="onDragEnd()">
                       @if (canManagePlan && projectEditable && a.status !== 'cancelled') { <span class="drag-handle" aria-hidden="true">⋮⋮</span> }
-                      <div><strong>{{ a.description }}</strong><small><app-icon name="user" [size]="13"></app-icon> {{ a.participant_name }} · vence {{ date(a.deadline) }}
+                      <div><strong>{{ a.description }}</strong><small><app-icon name="user" [size]="13"></app-icon> {{ a.participant_name }} · {{ dueText(a.deadline) }}
                         @if (+a.evidence_count) { · <app-icon name="clip" [size]="13"></app-icon>{{ a.evidence_count }} evidencia(s) }
                         @if (a.materials?.length) { · <app-icon name="file" [size]="13"></app-icon>material }</small></div>
-                      @if (a.deadline_status === 'Retrasada' || a.deadline_status === 'Próxima a vencer') {
+                      @if (showDeadlineBadge(a.deadline_status)) {
                         <span class="badge" [class]="'badge tone-' + deadlineTone(a.deadline_status)">{{ a.deadline_status }}</span>
                       }
                       <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
@@ -621,7 +637,7 @@
         <!-- ========================= ACTIVIDAD ========================= -->
         } @else if (section === 'activities' && activity) {
           <a class="back" [routerLink]="['/app/projects', activity['project_id']]" [queryParams]="{ tab: 'Actividades' }"><app-icon name="back"></app-icon>{{ activity['project_title'] }}</a>
-          <div class="heading"><div><h1>{{ activity['description'] }}</h1><p>Responsable: {{ activity['participant_name'] }} · vence {{ date(activity['deadline']) }}</p></div>
+          <div class="heading"><div><h1>{{ activity['description'] }}</h1><p>Responsable: {{ activity['participant_name'] }} · {{ dueText(activity['deadline']) }}</p></div>
             <span class="badge big" [class]="'badge big tone-' + status('activity', activity['status']).tone">{{ status('activity', activity['status']).label }}</span></div>
 
           @if (activity['observations']) {
@@ -633,8 +649,8 @@
 
           <section class="panel">
             <dl class="details">
-              <div><dt>Fecha límite</dt><dd>{{ date(activity['deadline']) }}
-                @if (activity['deadline_status'] !== 'Normal') { <span class="badge" [class]="'badge tone-' + deadlineTone(activity['deadline_status'])">{{ activity['deadline_status'] }}</span> }</dd></div>
+              <div><dt>Fecha estimada</dt><dd>{{ activity['deadline'] ? date(activity['deadline']) : 'Sin fecha' }}
+                @if (showDeadlineBadge(activity['deadline_status'])) { <span class="badge" [class]="'badge tone-' + deadlineTone(activity['deadline_status'])">{{ activity['deadline_status'] }}</span> }</dd></div>
               <div><dt>Hito</dt><dd>{{ activity['milestones']?.length ? activity['milestones'].join(', ') : 'Sin hito' }}</dd></div>
             </dl>
             <div class="actions">
@@ -676,6 +692,88 @@
           </section>
 
         <!-- ========================= USUARIOS ========================= -->
+        } @else if (section === 'calendar') {
+          <div class="heading"><div><h1>Calendario</h1><p>Tus fechas estimadas de entrega y los hitos de tus proyectos.</p></div>
+            <div class="seg" role="group" aria-label="Qué mostrar">
+              <button type="button" [class.active]="calScope === 'mine'" (click)="setCalScope('mine')">Mis actividades</button>
+              <button type="button" [class.active]="calScope === 'all'" (click)="setCalScope('all')">{{ role === 'coordinator' ? 'Todos los proyectos' : 'Todo mi equipo' }}</button>
+            </div></div>
+          <div class="cal-layout">
+            <section class="panel cal-panel">
+              <div class="cal-bar">
+                <button type="button" class="icon-button" (click)="calMove(-1)" aria-label="Mes anterior">‹</button>
+                <h2>{{ calTitle }}</h2>
+                <button type="button" class="icon-button" (click)="calMove(1)" aria-label="Mes siguiente">›</button>
+                <button type="button" class="secondary small" (click)="calMove(0)">Hoy</button>
+                <span class="cal-sum"><b>{{ calCounts.pending }}</b> pendientes · <b>{{ calCounts.done }}</b> hechas@if (calCounts.late) { · <b class="late">{{ calCounts.late }}</b> retrasadas }</span>
+              </div>
+              <div class="cal-grid" role="grid" [attr.aria-label]="'Calendario de ' + calTitle">
+                @for (d of weekDays; track d) { <div class="cal-dow" role="columnheader">{{ d }}</div> }
+                @for (week of calWeeks; track $index) {
+                  @for (day of week; track day.iso) {
+                    <div class="cal-day" role="gridcell" tabindex="0" [class.out]="!day.inMonth" [class.today]="day.today" [class.weekend]="day.weekend"
+                      [class.selected]="calSelected === day.iso" (click)="calSelected = day.iso" (keydown.enter)="calSelected = day.iso">
+                      <span class="cal-num">{{ day.day }}</span>
+                      @for (m of day.milestones; track m.id) {
+                        <a class="ms" [style.--pc]="m.project_color" [routerLink]="['/app/projects', m.project_id]" [queryParams]="{ tab: 'Actividades' }"
+                          (click)="$event.stopPropagation()" [title]="'Hito: ' + m.description + ' · ' + m.project_title">◆ {{ m.description }}</a>
+                      }
+                      @for (a of day.items.slice(0, 3); track a.id) {
+                        <a [class]="calClass(a)" [style.--pc]="a.project_color" [routerLink]="['/app/activities', a.id]" (click)="$event.stopPropagation()"
+                          [title]="a.description + ' · ' + a.project_title + ' · ' + status('activity', a.status).label">
+                          @if (a.status === 'completed') { <span aria-hidden="true">✓ </span> }{{ a.description }}</a>
+                      }
+                      @if (day.items.length > 3) { <span class="more">+{{ day.items.length - 3 }} más</span> }
+                      <span class="cal-dots" aria-hidden="true">@for (a of day.items; track a.id) { <i [style.background]="a.project_color" [class.done]="a.status === 'completed'"></i> }</span>
+                    </div>
+                  }
+                }
+              </div>
+              <div class="cal-legend">
+                <span><i class="lg ev"></i>Pendiente</span><span><i class="lg ev review"></i>En revisión</span><span><i class="lg ev changes"></i>Con cambios</span>
+                <span><i class="lg ev late"></i>Retrasada</span><span><i class="lg ev done"></i>Completada</span><span><b class="lg-ms">◆</b> Hito</span>
+              </div>
+            </section>
+            <div class="cal-side">
+              <section class="panel">
+                <h2><app-icon name="folder"></app-icon>Proyectos</h2>
+                <div class="cal-projects">
+                  @for (p of cal['projects'] || []; track p.id) {
+                    <button type="button" class="cal-project" [class.off]="calHidden.has(+p.id)" (click)="toggleCalProject(+p.id)" [attr.aria-pressed]="!calHidden.has(+p.id)">
+                      <span class="pdot" [style.background]="p.color"></span>{{ p.title }}</button>
+                  } @empty { <p class="muted">No participas en proyectos todavía.</p> }
+                </div>
+                @if ((cal['projects'] || []).length > 1) { <small class="muted">Toca un proyecto para ocultarlo o mostrarlo.</small> }
+              </section>
+              <section class="panel">
+                @if (calSelected) {
+                  <h2><app-icon name="calendar"></app-icon>{{ calLabel(calSelected) }}</h2>
+                  @for (m of calDay.milestones; track m.id) {
+                    <a class="list-row" [routerLink]="['/app/projects', m.project_id]" [queryParams]="{ tab: 'Actividades' }"><span class="pdot" [style.background]="m.project_color"></span>
+                      <div><strong>◆ {{ m.description }}</strong><small>Hito · {{ m.project_title }}</small></div></a>
+                  }
+                  @for (a of calDay.items; track a.id) {
+                    <a class="list-row" [routerLink]="['/app/activities', a.id]"><span class="pdot" [style.background]="a.project_color"></span>
+                      <div><strong>{{ a.description }}</strong><small>{{ a.participant_name }} · {{ a.project_title }}</small></div>
+                      <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span></a>
+                  } @empty { @if (!calDay.milestones.length) { <p class="muted">Nada para este día.</p> } }
+                } @else {
+                  <h2><app-icon name="calendar"></app-icon>Elige un día</h2><p class="muted">Toca un día para ver todo lo que tiene.</p>
+                }
+              </section>
+              @if (calUndated.length) {
+                <section class="panel">
+                  <h2><app-icon name="clock"></app-icon>Sin fecha ({{ calUndated.length }})</h2>
+                  <div class="scroll-box short">
+                    @for (a of calUndated; track a.id) {
+                      <a class="list-row" [routerLink]="['/app/activities', a.id]"><span class="pdot" [style.background]="a.project_color"></span>
+                        <div><strong>{{ a.description }}</strong><small>{{ a.project_title }}</small></div></a>
+                    }
+                  </div>
+                </section>
+              }
+            </div>
+          </div>
         } @else if (section === 'users') {
           <div class="heading"><div><h1>Usuarios</h1><p>Cuentas, roles y acceso. Las cuentas no se borran: se desactivan.</p></div>
             <button type="button" class="primary" (click)="newUser()"><app-icon name="plus"></app-icon>Nuevo usuario</button></div>
@@ -900,7 +998,9 @@
         }
         <form (ngSubmit)="submitDialog()" novalidate>
           @for (field of dialog.fields; track field.key) {
-            @if (field.type === 'choice') {
+            @if (hiddenByFiles(field)) {
+              <!-- Con varios archivos, cada uno lleva su propio título (abajo, en la lista). -->
+            } @else if (field.type === 'choice') {
               <fieldset class="choices"><legend>{{ field.label }}{{ isRequired(field) ? ' *' : '' }}</legend>
                 @for (o of field.options || []; track o.value) {
                   <label class="choice" [class.selected]="dialog.values[field.key] === o.value">
@@ -925,11 +1025,36 @@
                   (input)="bulletize(field, area)" (keydown.enter)="bulletEnter(field, $any($event))"></textarea>
                 @if (field.key === 'objectives') { <small class="hint">Escribe <strong>*</strong> y un espacio al inicio de la línea para hacer una viñeta (•).</small> }
               } @else if (field.type === 'file') {
-                <input #fileInput [id]="'f_' + field.key" type="file" accept=".pdf,.doc,.docx,.xlsx,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg" (change)="chooseFile($event)"
-                  [class.has-file]="!!filePreview">
-                @if (filePreview) {
-                  <ng-container *ngTemplateOutlet="stageView; context: { $implicit: filePreview, big: false }"></ng-container>
-                  <button type="button" class="text-button danger-text remove-file" (click)="clearDialogFile(fileInput)"><app-icon name="trash"></app-icon>Quitar archivo</button>
+                <label class="drop-area" [class.dragging-files]="dropActive" [for]="'f_' + field.key"
+                  (dragover)="$event.preventDefault(); dropActive = true" (dragleave)="dropActive = false" (drop)="dropFiles($event, field)">
+                  <app-icon name="upload" [size]="22"></app-icon>
+                  <span><strong>{{ field.multiple ? 'Elige o arrastra aquí uno o varios archivos' : (dialogFiles.length ? 'Cambiar archivo' : 'Elige o arrastra aquí el archivo') }}</strong>
+                    @if (field.multiple && dialogFiles.length) { <small>Puedes seguir agregando más.</small> }</span>
+                  <input #fileInput class="visually-hidden" [id]="'f_' + field.key" type="file" [multiple]="!!field.multiple"
+                    accept=".pdf,.doc,.docx,.xlsx,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg" (change)="chooseFile($event, field)">
+                </label>
+                @if (dialogFiles.length) {
+                  <ul class="picked-files">
+                    @for (pf of dialogFiles; track pf.file.name + pf.file.size; let i = $index) {
+                      <li [class.active]="i === previewIndex">
+                        <button type="button" class="picked-ext" [style.background]="fileIcon(extOf(pf.file.name))" (click)="showPicked(i)" title="Ver vista previa">{{ extOf(pf.file.name) }}</button>
+                        <div class="picked-main">
+                          @if (field.titleKey && dialogFiles.length > 1) {
+                            <input type="text" [name]="'title_' + i" [(ngModel)]="pf.title" aria-label="Título del archivo" placeholder="Título">
+                          } @else {
+                            <strong>{{ pf.file.name }}</strong>
+                          }
+                          <small>{{ pf.file.name }} · {{ fileSize(pf.file.size) }}</small>
+                        </div>
+                        <button type="button" class="icon-x" (click)="removePicked(i, field)" [attr.aria-label]="'Quitar ' + pf.file.name">×</button>
+                      </li>
+                    }
+                  </ul>
+                  @if (dialogFiles.length > 1) { <small class="hint">Toca la etiqueta de color de un archivo para ver su vista previa.</small> }
+                  @if (filePreview) { <ng-container *ngTemplateOutlet="stageView; context: { $implicit: filePreview, big: false }"></ng-container> }
+                  @if (dialogFiles.length > 1) {
+                    <button type="button" class="text-button danger-text remove-file" (click)="clearDialogFile(fileInput, field)"><app-icon name="trash"></app-icon>Quitar todos</button>
+                  }
                 }
               } @else if (field.type === 'password') {
                 <div class="password-box">
@@ -956,9 +1081,10 @@
             @if (field.hint && field.type === 'password' && !dialog.values[field.key]) { <small class="hint">{{ field.hint }}</small> }
           }
           @if (dialogError) { <p class="error" role="alert" [innerHTML]="fmt(dialogError)"></p> }
+          @if (dialogProgress) { <p class="upload-progress" role="status"><span class="spinner small"></span> {{ dialogProgress }}</p> }
           <footer>
             <button class="secondary" type="button" [disabled]="saving" (click)="closeDialog()">Volver</button>
-            <button [class]="dialog.danger ? 'danger' : 'primary'" type="submit" [disabled]="saving">{{ saving ? 'Guardando…' : dialog.confirmLabel }}</button>
+            <button [class]="dialog.danger ? 'danger' : 'primary'" type="submit" [disabled]="saving">{{ saving ? (dialogProgress ? 'Subiendo…' : 'Guardando…') : dialog.confirmLabel }}</button>
           </footer>
         </form>
       </section>

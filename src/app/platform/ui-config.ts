@@ -15,6 +15,7 @@ export const SECTIONS: Section[] = [
   { key: 'dashboard', title: 'Inicio', roles: ALL, menu: true, icon: 'home' },
   { key: 'proposals', title: 'Propuestas', roles: ALL, menu: true, icon: 'proposal' },
   { key: 'projects', title: 'Proyectos', roles: ALL, menu: true, icon: 'folder' },
+  { key: 'calendar', title: 'Calendario', roles: ALL, menu: true, icon: 'calendar' },
   { key: 'activities', title: 'Actividad', roles: ALL, menu: false, icon: 'tasks' },
   { key: 'users', title: 'Usuarios', roles: ['coordinator'], menu: true, icon: 'users' },
   { key: 'institutional', title: 'Fuentes institucionales', roles: ALL, menu: true, icon: 'book' },

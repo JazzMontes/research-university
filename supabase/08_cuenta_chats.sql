@@ -375,7 +375,7 @@ begin
     select * into a from research.activities where id = new.entity_id;
     if new.action in ('create', 'reassign') and a.participant_id <> new.actor_id then
       perform research.notify(array[a.participant_id], 'Nueva actividad asignada: ' || left(a.description, 120),
-        'Proyecto «' || t || '» · vence el ' || to_char(a.deadline, 'DD/MM/YYYY'), 'activities/' || a.id, 'progress');
+        'Proyecto «' || t || '» · ' || coalesce('fecha estimada ' || to_char(a.deadline, 'DD/MM/YYYY'), 'sin fecha estimada'), 'activities/' || a.id, 'progress');
     elsif new.action = 'submit' then
       perform research.notify(array_remove(array[p.responsible_researcher_id], new.actor_id), 'Entrega por revisar: ' || left(a.description, 120),
         (select name from research.users where id = new.actor_id) || ' la entregó en «' || t || '».', 'activities/' || a.id, 'progress');
@@ -481,15 +481,34 @@ set search_path = research, extensions, pg_temp as $$
 declare a record;
 begin
   if act = 'list' then
-    -- Recordatorios de fechas límite (una sola vez por actividad).
-    for a in select x.id, x.description, x.deadline, pr.title from research.activities x join research.projects pr on pr.id = x.project_id
+    -- Recordatorios (una vez por actividad y por fecha; si la fecha cambia, vuelven a avisar):
+    -- 3 días antes, el mismo día y, pasados 3 días de tolerancia, que se considera retrasada.
+    for a in select x.id, x.description, x.deadline, pr.title, x.deadline - research.today() dias
+             from research.activities x join research.projects pr on pr.id = x.project_id
              where x.participant_id = u.id and x.status in ('pending', 'changes') and pr.status in ('active', 'changes')
-               and x.deadline <= current_date + 2 loop
-      perform research.notify(array[u.id],
-        case when a.deadline < current_date then '⚠ Actividad retrasada: ' else '⏰ Vence pronto: ' end || left(a.description, 120),
-        'Proyecto «' || a.title || '» · fecha límite ' || to_char(a.deadline, 'DD/MM/YYYY'), 'activities/' || a.id,
-        case when a.deadline < current_date then 'cancelled' else 'progress' end,
-        case when a.deadline < current_date then 'late:' else 'due:' end || a.id);
+               and x.deadline is not null and x.deadline <= research.today() + 3 loop
+      if a.dias between 1 and 3 then
+        perform research.notify(array[u.id], '⏰ Faltan ' || a.dias || case when a.dias = 1 then ' día' else ' días' end || ': ' || left(a.description, 120),
+          'Proyecto «' || a.title || '» · fecha estimada ' || to_char(a.deadline, 'DD/MM/YYYY') || '. Si terminas antes, puedes entregarla ya.',
+          'activities/' || a.id, 'progress', 'due3:' || a.id || ':' || a.deadline);
+      elsif a.dias = 0 then
+        perform research.notify(array[u.id], '📅 Hoy es la fecha estimada: ' || left(a.description, 120),
+          'Proyecto «' || a.title || '». Si necesitas más tiempo, avisa a tu investigador para ajustar la fecha.',
+          'activities/' || a.id, 'progress', 'today:' || a.id || ':' || a.deadline);
+      elsif a.dias < -3 then
+        perform research.notify(array[u.id], '⚠ Actividad retrasada: ' || left(a.description, 120),
+          'Proyecto «' || a.title || '» · la fecha estimada era el ' || to_char(a.deadline, 'DD/MM/YYYY') || '.',
+          'activities/' || a.id, 'cancelled', 'late:' || a.id || ':' || a.deadline);
+      end if;
+    end loop;
+    -- A quien gestiona el proyecto: actividades de su equipo que ya pasaron la tolerancia.
+    for a in select x.id, x.description, x.deadline, pr.title, us.name who
+             from research.activities x join research.projects pr on pr.id = x.project_id join research.users us on us.id = x.participant_id
+             where pr.responsible_researcher_id = u.id and x.participant_id <> u.id and x.status in ('pending', 'changes')
+               and pr.status in ('active', 'changes') and x.deadline < research.today() - 3 loop
+      perform research.notify(array[u.id], '⚠ Retrasada: ' || left(a.description, 120),
+        a.who || ' · proyecto «' || a.title || '» · fecha estimada ' || to_char(a.deadline, 'DD/MM/YYYY') || '. Puedes ajustar la fecha si hace falta.',
+        'activities/' || a.id, 'cancelled', 'latelead:' || a.id || ':' || a.deadline);
     end loop;
     return research.ok(jsonb_build_object(
       'unread', (select count(*) from research.notifications where user_id = u.id and read_at is null),
@@ -506,3 +525,20 @@ begin
   perform research.fail(404, 'Operación no disponible.');
   return null;
 end $$;
+
+-- ------------------------------------------------------------------
+-- Limpieza de lo que se acumula y ya no sirve (corre al instalar y, de vez en cuando, al iniciar sesión).
+-- ------------------------------------------------------------------
+create or replace function research.housekeeping()
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+begin
+  delete from research.user_sessions where revoked_at < now() - interval '7 days' or expires_at < now() - interval '7 days';
+  delete from research.password_resets where created_at < now() - interval '7 days';
+  delete from research.notifications where read_at < now() - interval '6 months';
+end $$;
+select research.housekeeping();
+
+-- Último resultado que muestra el SQL Editor: si ves esta fila, todo se instaló bien.
+select 'Listo: la base de datos quedó actualizada y limpia.' as resultado;
+
