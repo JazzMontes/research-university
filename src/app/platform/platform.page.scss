@@ -354,6 +354,19 @@ input[type=file].has-file { font-size: 12px; }
 .cred-box > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .cred-box small { color: #5b6b68; }
 .cred-box strong { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 17px; letter-spacing: .5px; user-select: all; }
+
+/* Visor de archivos guardados */
+.modal.viewer { width: min(900px, 96vw); max-width: 900px; }
+.file-preview.big img { max-height: 70vh; }
+.file-preview.big iframe { height: 70vh; }
+.file-preview.big pre { max-height: 60vh; font-size: 13px; }
+.viewer-loading { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 48px 0; color: #5b6b68; }
+.spinner { width: 20px; height: 20px; border: 3px solid #d6e4e0; border-top-color: #1f6f63; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.file-ext.as-button { border: 0; cursor: pointer; padding: 0; margin-right: 10px; }
+.file-ext.as-button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.file-row .file-main, .list-row .file-main { flex: 1; min-width: 0; }
+.view-btn { font-weight: 600; }
 /* Diálogo */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: #082b2780; display: grid; place-items: center; padding: 22px; }
 .modal { background: white; border-radius: 14px; width: min(620px, 100%); max-height: 90vh; overflow-y: auto; padding: 26px 28px; box-shadow: 0 15px 80px #123c3433; border-top: 6px solid var(--green); }

@@ -55,6 +55,7 @@ export interface Dialog {
 }
 
 interface ChatMessage { author: string; text: string; html?: string; pending?: boolean; attachment?: string; }
+interface FilePreview { name: string; size: string; ext: string; kind: 'image' | 'pdf' | 'text' | 'other'; url?: SafeResourceUrl; src?: string; text?: string; }
 interface ChatAttachment { name: string; mime: string; size: number; data?: string; text?: string; }
 
 const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,72}$/;
@@ -644,28 +645,73 @@ export class PlatformPage implements OnInit {
   }
 
   /** Vista previa del archivo elegido: imagen, PDF, texto o tarjeta con el tipo. */
-  filePreview?: { name: string; size: string; ext: string; kind: 'image' | 'pdf' | 'text' | 'other'; url?: SafeResourceUrl; src?: string; text?: string };
+  filePreview?: FilePreview;
   private previewUrl?: string;
   private async buildPreview(file?: File): Promise<void> {
     if (this.previewUrl) { URL.revokeObjectURL(this.previewUrl); this.previewUrl = undefined; }
     this.filePreview = undefined;
     if (!file) return;
-    const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const size = file.size >= 1048576 ? `${(file.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`;
-    const preview: NonNullable<PlatformPage['filePreview']> = { name: file.name, size, ext: ext.toUpperCase() || 'ARCHIVO', kind: 'other' };
-    if (/^image\//.test(file.type) || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
-      this.previewUrl = URL.createObjectURL(file); preview.kind = 'image'; preview.src = this.previewUrl;
-    } else if (ext === 'pdf') {
-      this.previewUrl = URL.createObjectURL(file); preview.kind = 'pdf';
-      preview.url = this.sanitizer.bypassSecurityTrustResourceUrl(this.previewUrl + '#toolbar=0&navpanes=0&view=FitH');
-    } else if (['txt', 'md', 'csv'].includes(ext)) {
-      preview.kind = 'text'; preview.text = (await file.slice(0, 4000).text()).slice(0, 1500);
-    } else if (['docx', 'xlsx'].includes(ext)) {
-      try { const text = await extractOfficeText(file); if (text.trim()) { preview.kind = 'text'; preview.text = text.slice(0, 1500); } } catch { /* solo tarjeta */ }
-    }
-    this.filePreview = preview;
+    const made = await this.makePreview(file);
+    this.previewUrl = made.objectUrl;
+    this.filePreview = made.preview;
     this.changeDetector.markForCheck();
   }
+  private async makePreview(file: File): Promise<{ preview: FilePreview; objectUrl?: string }> {
+    let objectUrl: string | undefined;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const size = file.size >= 1048576 ? `${(file.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+    const preview: FilePreview = { name: file.name, size, ext: ext.toUpperCase() || 'ARCHIVO', kind: 'other' };
+    if (/^image\//.test(file.type) || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
+      objectUrl = URL.createObjectURL(file); preview.kind = 'image'; preview.src = objectUrl;
+    } else if (ext === 'pdf') {
+      objectUrl = URL.createObjectURL(new Blob([file], { type: 'application/pdf' })); preview.kind = 'pdf';
+      preview.url = this.sanitizer.bypassSecurityTrustResourceUrl(objectUrl + '#navpanes=0&view=FitH');
+    } else if (['txt', 'md', 'csv'].includes(ext)) {
+      preview.kind = 'text'; preview.text = (await file.slice(0, 20000).text()).slice(0, 8000);
+    } else if (['docx', 'xlsx'].includes(ext)) {
+      try { const text = await extractOfficeText(file); if (text.trim()) { preview.kind = 'text'; preview.text = text.slice(0, 8000); } } catch { /* solo tarjeta */ }
+    }
+    return { preview, objectUrl };
+  }
+
+  /** Visor de archivos ya guardados (documentos, evidencias, material, propuesta, institucionales). */
+  viewer?: { title: string; loading: boolean; preview?: FilePreview; error?: string; download: () => Promise<void> };
+  private viewerUrl?: string;
+  async view(module: 'documents' | 'evidence' | 'institutional-documents', documentId: number, version?: number, title = ''): Promise<void> {
+    const params: Record<string, number> = { document_id: documentId };
+    if (version) params['version'] = version;
+    await this.openViewer(title, () => this.backend.fetchFile(module, params), () => this.download(module, documentId, version));
+  }
+  async viewProposalFile(): Promise<void> {
+    const p = this.proposal!;
+    await this.openViewer(p['file']?.['filename'] || 'Archivo de la propuesta',
+      () => this.backend.fetchFile('proposals', { proposal_id: p['id'] }, 'download-file'), () => this.downloadProposalFile());
+  }
+  private async openViewer(title: string, fetch: () => Promise<File | null>, download: () => Promise<void>): Promise<void> {
+    this.closeViewer();
+    this.viewer = { title, loading: true, download };
+    this.changeDetector.markForCheck();
+    try {
+      const file = await fetch();
+      if (!file) { this.viewer = undefined; await download(); return; }
+      const made = await this.makePreview(file);
+      if (!this.viewer) { if (made.objectUrl) URL.revokeObjectURL(made.objectUrl); return; }
+      this.viewerUrl = made.objectUrl;
+      this.viewer = { ...this.viewer, title: title || file.name, loading: false, preview: made.preview };
+    } catch (error) {
+      if (this.viewer) this.viewer = { ...this.viewer, loading: false, error: this.message(error, 'No se pudo abrir el archivo.') };
+    } finally {
+      this.changeDetector.markForCheck();
+    }
+  }
+  /** En celulares el PDF a veces no se ve dentro de la ventana: se abre en otra pestaña. */
+  openViewerTab(): void { if (this.viewerUrl) window.open(this.viewerUrl, '_blank'); }
+  closeViewer(): void {
+    if (this.viewerUrl) { URL.revokeObjectURL(this.viewerUrl); this.viewerUrl = undefined; }
+    this.viewer = undefined;
+  }
+  /** Tipo de archivo (PDF, DOCX…) para la etiqueta de color en las listas. */
+  extOf(name: unknown): string { const m = /\.([a-z0-9]+)$/i.exec(String(name || '')); return m ? m[1].toUpperCase() : 'ARCH'; }
   fileIcon(ext: string): string {
     return ({ PDF: '#c0392b', DOC: '#2b5797', DOCX: '#2b5797', XLS: '#1e7145', XLSX: '#1e7145', CSV: '#1e7145', PPT: '#d24726', PPTX: '#d24726' } as Record<string, string>)[ext] || '#5b6b68';
   }

@@ -496,7 +496,11 @@ Deno.serve(async (req: Request) => {
 
   // La app "despierta" la función al abrir el asistente, para que la primera pregunta no espere el arranque.
   if (input.ping === true) return reply(200, { ok: true });
-  if (input.action === "password-reset") return reply(200, await passwordReset(String(input.identifier || "")));
+  if (input.action === "password-reset") {
+    // passwordReset ya trae { status, body }: se responde tal cual para que la app muestre el aviso correcto.
+    const result = await passwordReset(String(input.identifier || ""));
+    return reply(Number(result.status) || 200, (result.body ?? {}) as Json);
+  }
   if (input.stream === true) {
     return streamReply(apikey, datos, token, Array.isArray(input.history) ? input.history : [], readAttachment(input.attachment));
   }

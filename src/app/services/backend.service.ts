@@ -147,6 +147,18 @@ export class BackendService {
   }
 
   /** Descarga un archivo: en PHP abre la URL; en Supabase recibe base64 y lo guarda. */
+  /** Trae el archivo guardado (para verlo en la app). En modo PHP devuelve null y se abre en otra pestaña. */
+  async fetchFile(module: string, params: Record<string, string | number>, action = 'download'): Promise<File | null> {
+    if (this.mode === 'php') return null;
+    const result = await this.call<{ filename: string; mime: string; content_base64: string; message?: string }>(
+      `${module}/${action}.php`, 'GET', params, 60000);
+    if (result.status !== 200) throw new Error(result.body?.message || 'No se pudo abrir el archivo.');
+    const binary = atob(result.body.content_base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new File([bytes], result.body.filename || 'archivo', { type: result.body.mime || 'application/octet-stream' });
+  }
+
   async download(module: string, params: Record<string, string | number>, action = 'download'): Promise<void> {
     if (this.mode === 'php') {
       const query = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
