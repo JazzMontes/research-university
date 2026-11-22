@@ -1,0 +1,38 @@
+DATOS PARA CAPTURAR — Huertos urbanos comunitarios para la seguridad alimentaria
+======================================================================
+
+Copia y pega cada bloque en el formulario «Nueva propuesta».
+
+TÍTULO:
+Huertos urbanos comunitarios para la seguridad alimentaria
+
+DESCRIPCIÓN:
+Instalación de cuatro huertos en azoteas y patios de colonias populares, con capacitación a 40 familias en cultivo orgánico, composta y riego por goteo. Se medirá la producción y el ahorro en gasto de alimentos.
+
+OBJETIVOS (escríbelos con «* » al inicio: la app los convierte en viñetas):
+* Instalar 4 huertos de al menos 20 m² cada uno
+* Capacitar a 40 familias en cultivo orgánico y composta
+* Medir la producción mensual en kilogramos
+* Estimar el ahorro familiar en alimentos
+
+QUIÉN LA REGISTRA: Investigador 2 (usuario investigador2)
+
+PLAN DE TRABAJO (hitos y actividades para crear en el proyecto):
+
+  HITO: Instalación de huertos  — fecha meta: hoy + 45 días
+    • Seleccionar azoteas y patios  — fecha límite: hoy + 38 días
+    • Construir camas de cultivo  — fecha límite: hoy + 41 días
+    • Instalar riego por goteo  — fecha límite: hoy + 44 días
+
+  HITO: Capacitación  — fecha meta: hoy + 75 días
+    • Taller de composta  — fecha límite: hoy + 68 días
+    • Taller de control orgánico de plagas  — fecha límite: hoy + 71 días
+
+  HITO: Evaluación  — fecha meta: hoy + 120 días
+    • Registrar cosecha mensual  — fecha límite: hoy + 113 días
+    • Encuesta de ahorro familiar  — fecha límite: hoy + 116 días
+
+CAMINO QUE SE PRUEBA:
+Propuesta de un INVESTIGADOR → la revisa Coordinación (pide cambios y luego aprueba) → permisos a una estudiante → arrastrar actividades a hitos → cierre con cambios → cierre aprobado.
+
+Los pasos detallados están en GUIA_DE_PRUEBAS.docx (y en CASOS_DE_PRUEBA.xlsx para ir marcando).

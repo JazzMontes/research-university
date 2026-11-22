@@ -18,7 +18,7 @@ returns text language sql immutable as $$
     when 'changes/list' then 'GET' when 'changes/request' then 'POST' when 'changes/review' then 'POST'
     when 'notifications/list' then 'POST' when 'notifications/read' then 'POST'
     when 'users/list' then 'GET' when 'users/create' then 'POST' when 'users/update' then 'POST'
-    when 'users/reset-password' then 'POST' when 'users/delete' then 'POST'
+    when 'users/reset-password' then 'POST' when 'users/delete' then 'POST' when 'users/impact' then 'GET'
     when 'catalogs/researchers' then 'GET' when 'catalogs/participants' then 'GET'
     when 'proposals/list' then 'GET' when 'proposals/detail' then 'GET' when 'proposals/history' then 'GET'
     when 'proposals/create' then 'POST' when 'proposals/update' then 'POST' when 'proposals/review' then 'POST'

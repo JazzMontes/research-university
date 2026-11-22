@@ -143,6 +143,7 @@ Pendiente → Entregar → En revisión → Aceptar (**Completada**) o Pedir cam
 - **Fechas de actividades**: la fecha límite no puede ser anterior al día en que se creó la actividad (al crearla: hoy), ni en la app ni en el servidor. La fecha meta de un hito no puede ser antes del inicio del proyecto.
 - **Mover actividades a un hito**: en el Plan de trabajo se arrastra una actividad sobre un hito (o a «Sin hito»). Desde cada hito también está **Agregar sin hito**, para elegir una o varias actividades que no tienen hito.
 - **Fechas del proyecto**: inicia el día en que se aprobó la propuesta (ya no se edita; los proyectos existentes se ajustan solos). El **término estimado** es opcional y se puede cambiar; el **término real** se marca solo al completarse o cancelarse el proyecto (y se borra si se reabre).
+- **Eliminar usuarios sin bloqueos**: si la cuenta tiene trabajo pendiente, la app lo muestra y lo traspasa en lugar de impedirlo. Sus proyectos en curso y las propuestas que tenía por revisar pasan al investigador que elijas en la misma ventana. Sus actividades sin terminar pasan al responsable de cada proyecto. Sus propias propuestas en trámite se cancelan y sus solicitudes pendientes se cierran.
 - Los buscadores ya no dicen «(se actualiza mientras escribes)».
 - Corrección: la recuperación de contraseña ahora sí muestra en pantalla «No hay ninguna cuenta registrada con ese correo» (y los demás avisos de error).
 - Requiere ejecutar `supabase/instalar_todo.sql` y publicar de nuevo la función `asistente`.

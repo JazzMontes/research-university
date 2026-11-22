@@ -1,0 +1,40 @@
+DATOS PARA CAPTURAR — Calidad del agua en comunidades rurales de la Sierra Norte
+======================================================================
+
+Copia y pega cada bloque en el formulario «Nueva propuesta».
+
+TÍTULO:
+Calidad del agua en comunidades rurales de la Sierra Norte
+
+DESCRIPCIÓN:
+Las comunidades de San Juan, El Roble y La Loma se abastecen de manantiales y pozos que nunca se han analizado. El proyecto medirá parámetros físico-químicos y bacteriológicos del agua durante tres meses para identificar riesgos a la salud y proponer medidas de potabilización de bajo costo.
+
+OBJETIVOS (escríbelos con «* » al inicio: la app los convierte en viñetas):
+* Medir pH, turbiedad, cloro residual y coliformes en 12 puntos de muestreo
+* Comparar los resultados con la NOM-127-SSA1-2021
+* Proponer al menos dos alternativas de potabilización de bajo costo
+* Presentar los resultados a las autoridades comunitarias
+
+INVESTIGADOR RESPONSABLE A ELEGIR: Alejo
+
+QUIÉN LA REGISTRA: Diana (usuario diana)
+
+PLAN DE TRABAJO (hitos y actividades para crear en el proyecto):
+
+  HITO: Diseño del muestreo  — fecha meta: hoy + 20 días
+    • Revisar la NOM-127 y normatividad aplicable  — fecha límite: hoy + 13 días
+    • Definir y georreferenciar los puntos de muestreo  — fecha límite: hoy + 16 días
+
+  HITO: Trabajo de campo  — fecha meta: hoy + 60 días
+    • Tomar muestras en San Juan y El Roble  — fecha límite: hoy + 53 días
+    • Tomar muestras en La Loma  — fecha límite: hoy + 56 días
+    • Capturar resultados del laboratorio  — fecha límite: hoy + 59 días
+
+  HITO: Informe final  — fecha meta: hoy + 90 días
+    • Redactar el informe final  — fecha límite: hoy + 83 días
+    • Presentar resultados a la comunidad  — fecha límite: hoy + 86 días
+
+CAMINO QUE SE PRUEBA:
+Camino feliz completo: propuesta → aprobación del investigador → proyecto → hitos y actividades → evidencias → cierre aprobado → reporte PDF.
+
+Los pasos detallados están en GUIA_DE_PRUEBAS.docx (y en CASOS_DE_PRUEBA.xlsx para ir marcando).

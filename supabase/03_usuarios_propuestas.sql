@@ -61,11 +61,79 @@ begin
   end if;
 end $$;
 
+-- ------------------------------------------------------------------
+-- Eliminar una cuenta sin dejar trabajo sin dueño.
+-- user_impact: lo que se verá afectado (para avisar a Coordinación antes de confirmar).
+-- user_handover: hace el traspaso al eliminar.
+-- ------------------------------------------------------------------
+create or replace function research.user_impact(t research.users)
+returns jsonb language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select jsonb_build_object(
+    'projects', (select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title) order by p.title), '[]')
+                 from research.projects p where p.responsible_researcher_id = t.id and p.status in ('active', 'changes', 'closing')),
+    'proposals_to_review', (select coalesce(jsonb_agg(jsonb_build_object('id', x.id, 'title', x.title,
+                              'author', (select name from research.users where id = x.author_id)) order by x.title), '[]')
+                 from research.proposals x where x.responsible_researcher_id = t.id and x.author_id <> t.id
+                   and x.status in ('pending_researcher_review', 'changes_requested')),
+    'own_proposals', (select coalesce(jsonb_agg(jsonb_build_object('id', x.id, 'title', x.title, 'status', x.status) order by x.title), '[]')
+                 from research.proposals x where x.author_id = t.id and x.status in ('pending_researcher_review', 'pending_coordinator', 'changes_requested')),
+    'activities', (select coalesce(jsonb_agg(jsonb_build_object('project_id', s.project_id, 'title', s.title, 'count', s.n,
+                              'goes_to', s.lead, 'lead_is_user', s.lead_id = t.id) order by s.title), '[]')
+                 from (select p.id project_id, p.title, count(*) n, p.responsible_researcher_id lead_id,
+                              (select name from research.users where id = p.responsible_researcher_id) lead
+                       from research.activities a join research.projects p on p.id = a.project_id
+                       where a.participant_id = t.id and a.status in ('pending', 'in_review', 'changes') and p.status in ('active', 'changes', 'closing')
+                       group by p.id) s),
+    'requests', (select count(*) from research.researcher_change_requests where requested_by = t.id and status = 'pending'));
+$$;
+
+create or replace function research.user_handover(t research.users, successor integer, actor integer)
+returns jsonb language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare imp jsonb := research.user_impact(t); p research.projects; x research.proposals; a record; n_act integer := 0; why text;
+begin
+  why := 'Se eliminó la cuenta de ' || t.name;
+  if (jsonb_array_length(imp -> 'projects') > 0 or jsonb_array_length(imp -> 'proposals_to_review') > 0) then
+    if successor is null then perform research.fail(422, 'Elige qué investigador recibe sus proyectos y propuestas.'); end if;
+    if successor = t.id then perform research.fail(422, 'Elige a otra persona: no puede recibirlos la misma cuenta que se elimina.'); end if;
+    perform research.active_role(successor, 'researcher');
+  end if;
+  -- 1) Proyectos en curso donde era responsable → nuevo responsable.
+  for p in select * from research.projects where responsible_researcher_id = t.id and status in ('active', 'changes', 'closing') for update loop
+    perform research.project_set_researcher(p, successor, actor, why);
+  end loop;
+  -- 2) Propuestas de estudiantes que tenía por revisar → las revisa el nuevo investigador.
+  for x in select * from research.proposals where responsible_researcher_id = t.id and author_id <> t.id
+           and status in ('pending_researcher_review', 'changes_requested') for update loop
+    perform research.proposal_set_researcher(x, successor, actor, why);
+  end loop;
+  -- 3) Sus propias propuestas en trámite se cancelan (se pueden consultar en el historial).
+  for x in select * from research.proposals where author_id = t.id and status in ('pending_researcher_review', 'pending_coordinator', 'changes_requested') for update loop
+    update research.proposals set status = 'cancelled', status_before_cancel = x.status, updated_at = now() where id = x.id;
+    perform research.proposal_history_add(x.id, actor, 'cancelled', x.status, 'cancelled', why || ' (autor).');
+  end loop;
+  -- 4) Actividades sin terminar → al investigador responsable de cada proyecto (ya actualizado en el paso 1).
+  for a in select ac.id, ac.project_id, pr.responsible_researcher_id lead from research.activities ac join research.projects pr on pr.id = ac.project_id
+           where ac.participant_id = t.id and ac.status in ('pending', 'in_review', 'changes') and pr.status in ('active', 'changes', 'closing') for update of ac loop
+    insert into research.participants (project_id, user_id, project_role) values (a.project_id, a.lead, 'Investigador responsable')
+      on conflict (project_id, user_id) do update set is_active = 1, removed_at = null;
+    update research.activities set participant_id = a.lead, updated_at = now() where id = a.id;
+    perform research.event_project(a.project_id, actor, 'activity', a.id, 'reassign', jsonb_build_object(
+      'before', t.name, 'after', (select name from research.users where id = a.lead), 'reason', why));
+    n_act := n_act + 1;
+  end loop;
+  -- 5) Sale de los equipos y sus solicitudes pendientes se cierran solas.
+  update research.participants set is_active = 0, removed_at = coalesce(removed_at, now()), can_manage = 0 where user_id = t.id and is_active = 1;
+  perform research.change_requests_cleanup();
+  return imp || jsonb_build_object('activities_moved', n_act);
+end $$;
+
 create or replace function research.ep_users(u research.users, act text, d jsonb)
 returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
 declare
-  t research.users; v_role text; v_pwd text; v_email text; v_status text; v_name text; v_username text;
+  t research.users; v_role text; v_pwd text; v_email text; v_status text; v_name text; v_username text; handover jsonb;
 begin
   if u.role <> 'coordinator' then perform research.fail(403, 'Solo Coordinación administra usuarios.'); end if;
 
@@ -100,16 +168,21 @@ begin
   select * into t from research.users where id = research.req_id(d, 'user_id') and deleted_at is null for update;
   if t.id is null then perform research.fail(404, 'Usuario no encontrado.'); end if;
 
+  if act = 'impact' then
+    return research.ok(jsonb_build_object('impact', research.user_impact(t)));
+  end if;
+
   if act = 'delete' then
-    -- Eliminar definitivamente. Si la persona dejó historial (propuestas, actividades, documentos…),
-    -- sus datos personales se borran y su nombre aparece como "Usuario eliminado" para no romper ese historial.
+    -- Eliminar definitivamente. Ya no se detiene por el trabajo pendiente: se hace el traspaso (user_handover).
+    -- Si la persona dejó historial (propuestas, actividades, documentos…), sus datos personales se borran
+    -- y su nombre aparece como "Usuario eliminado" para no romper ese historial.
     if t.id = u.id then perform research.fail(409, 'No puedes eliminar tu propia cuenta.'); end if;
-    perform research.user_can_leave(t, t.role, 'inactive');
+    handover := research.user_handover(t, case when research.has(d, 'successor_id') then research.req_id(d, 'successor_id') end, u.id);
     begin
       delete from research.user_sessions where user_id = t.id;
       delete from research.participants where user_id = t.id;
       delete from research.users where id = t.id;
-      return research.ok(jsonb_build_object('deleted', t.id, 'mode', 'deleted'));
+      return research.ok(jsonb_build_object('deleted', t.id, 'mode', 'deleted', 'handover', handover));
     exception when foreign_key_violation then
       update research.participants set is_active = 0, removed_at = coalesce(removed_at, now()) where user_id = t.id;
       update research.user_sessions set revoked_at = now() where user_id = t.id and revoked_at is null;
@@ -118,7 +191,7 @@ begin
       update research.users set name = 'Usuario eliminado', username = 'eliminado.' || t.id, email = null, avatar = null,
         password_hash = research.hash_password(encode(extensions.gen_random_bytes(18), 'hex') || 'Aa1'),
         status = 'inactive', must_change_password = 0, deleted_at = now(), updated_at = now() where id = t.id;
-      return research.ok(jsonb_build_object('deleted', t.id, 'mode', 'anonymized'));
+      return research.ok(jsonb_build_object('deleted', t.id, 'mode', 'anonymized', 'handover', handover));
     end;
   end if;
 

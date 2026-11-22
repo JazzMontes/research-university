@@ -868,6 +868,16 @@
         <header><h2 id="modal-title"><app-icon [name]="dialog.danger ? 'alert' : 'edit'" [size]="22"></app-icon><span [innerHTML]="fmt(dialog.title)"></span></h2><button type="button" (click)="closeDialog()" [disabled]="saving" aria-label="Cerrar">×</button></header>
         @if (dialog.intro) { <p class="intro" [innerHTML]="fmt(dialog.intro)"></p> }
         @if (dialog.warning) { <p class="warning" role="note"><app-icon name="alert" [size]="20"></app-icon><span [innerHTML]="fmt(dialog.warning)"></span></p> }
+        @if (dialog.notes?.length) {
+          <div class="dialog-notes">
+            @if (dialog.notesTitle) { <h3>{{ dialog.notesTitle }}</h3> }
+            <ul>
+              @for (n of dialog.notes; track $index) {
+                <li [class.ok]="n.tone === 'ok'"><app-icon [name]="n.icon" [size]="18"></app-icon><span [innerHTML]="fmt(n.text)"></span></li>
+              }
+            </ul>
+          </div>
+        }
         <form (ngSubmit)="submitDialog()" novalidate>
           @for (field of dialog.fields; track field.key) {
             @if (field.type === 'choice') {

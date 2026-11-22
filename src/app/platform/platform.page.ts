@@ -50,6 +50,9 @@ export interface Dialog {
   /** Texto en rojo que explica lo que no se puede deshacer fácilmente. */
   warning?: string;
   danger?: boolean;
+  /** Lista de lo que pasará (por ejemplo, el traspaso al eliminar una cuenta). */
+  notes?: { icon: string; text: string; tone?: 'ok' | 'warn' }[];
+  notesTitle?: string;
   confirmLabel: string;
   fields: DialogField[];
   values: Row;
@@ -1546,18 +1549,46 @@ export class PlatformPage implements OnInit {
     });
   }
 
+  /** Eliminar cuenta: avisa qué trabajo tiene pendiente y lo traspasa en lugar de impedir la eliminación. */
   deleteUser(user: Row): void {
-    this.openDialog({
-      title: 'Eliminar usuario definitivamente', confirmLabel: 'Sí, eliminar para siempre', danger: true, values: {},
-      warning: `¿Segura que quieres eliminar a «${user['name']}»${String(user['username']).toLowerCase() !== String(user['name']).toLowerCase() ? ' (usuario ' + user['username'] + ')' : ''}? ` +
-        'Esto NO se puede deshacer: ya no podrá entrar y se borran sus datos personales. Si participó en proyectos, en su historial aparecerá como «Usuario eliminado». ' +
-        'Si solo quieres quitarle el acceso por un tiempo, mejor desactiva la cuenta en Editar.',
-      fields: [{ key: 'confirm', label: 'Para confirmar, escribe la palabra ELIMINAR', type: 'text', required: true, placeholder: 'ELIMINAR' }],
-      submit: async values => {
-        if (String(values['confirm']).trim().toUpperCase() !== 'ELIMINAR') throw new Error('Escribe ELIMINAR para confirmar.');
-        const result = await this.post('users/delete.php', { user_id: user['id'] });
-        return result['mode'] === 'deleted' ? 'Usuario eliminado.' : 'Usuario eliminado; su historial queda como «Usuario eliminado».';
-      },
+    void this.withOptions(async () => {
+      const impact: Row = (await this.api.request<Row>('users/impact.php', { user_id: user['id'] }))['impact'] || {};
+      const projects: Row[] = impact['projects'] || [], toReview: Row[] = impact['proposals_to_review'] || [];
+      const own: Row[] = impact['own_proposals'] || [], acts: Row[] = impact['activities'] || [];
+      const list = (rows: Row[]) => rows.map(r => `«${r['title']}»`).join(', ');
+      const needsSuccessor = projects.length > 0 || toReview.length > 0;
+      const notes: NonNullable<Dialog['notes']> = [];
+      if (projects.length) notes.push({ icon: 'folder', tone: 'warn', text: `Es investigador responsable de ${list(projects)}. Pasarán al investigador que elijas abajo; el resto del equipo se queda igual.` });
+      if (toReview.length) notes.push({ icon: 'proposal', tone: 'warn', text: `Tiene propuestas de estudiantes por revisar: ${toReview.map(r => `«${r['title']}» (de ${r['author']})`).join(', ')}. Las revisará el investigador que elijas.` });
+      for (const a of acts) {
+        notes.push({ icon: 'tasks', tone: 'warn', text: `Tiene ${a['count']} actividad(es) sin terminar en «${a['title']}». Pasarán a ` +
+          (a['lead_is_user'] ? 'quien elijas como nuevo responsable' : `«${a['goes_to']}», responsable del proyecto`) + ', que después puede reasignarlas.' });
+      }
+      if (own.length) notes.push({ icon: 'ban', tone: 'warn', text: `Sus propuestas en trámite ${list(own)} se cancelarán (quedan en el historial).` });
+      if (Number(impact['requests'])) notes.push({ icon: 'swap', tone: 'warn', text: `Sus ${impact['requests']} solicitud(es) de cambio de investigador pendientes se cerrarán.` });
+      if (!notes.length) notes.push({ icon: 'check', tone: 'ok', text: 'No tiene trabajo pendiente: eliminarla no afecta a ningún proyecto ni propuesta.' });
+      const options = needsSuccessor ? (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(user['id'])) : [];
+      const sameName = String(user['username']).toLowerCase() === String(user['name']).toLowerCase();
+      this.openDialog({
+        title: 'Eliminar usuario definitivamente', confirmLabel: 'Sí, eliminar para siempre', danger: true, values: {},
+        warning: `¿Segura que quieres eliminar a «${user['name']}»${sameName ? '' : ' (usuario ' + user['username'] + ')'}? ` +
+          'Esto NO se puede deshacer: ya no podrá entrar y se borran sus datos personales. En el historial aparecerá como «Usuario eliminado». ' +
+          'Si solo quieres quitarle el acceso por un tiempo, mejor desactiva la cuenta en Editar.',
+        notesTitle: needsSuccessor || notes[0].tone === 'warn' ? 'Qué pasará con su trabajo pendiente' : 'Revisión de pendientes', notes,
+        fields: [
+          ...(needsSuccessor ? [{ key: 'successor_id', label: 'Investigador que recibe sus proyectos y propuestas', type: 'select' as const, required: true, options,
+            hint: 'Puede ser un investigador o alguien de Coordinación.' }] : []),
+          { key: 'confirm', label: 'Para confirmar, escribe la palabra ELIMINAR', type: 'text', required: true, placeholder: 'ELIMINAR' },
+        ],
+        submit: async values => {
+          if (String(values['confirm']).trim().toUpperCase() !== 'ELIMINAR') throw new Error('Escribe ELIMINAR para confirmar.');
+          const result = await this.post('users/delete.php', { user_id: user['id'], ...(needsSuccessor ? { successor_id: values['successor_id'] } : {}) });
+          const moved = Number(result['handover']?.['activities_moved'] || 0);
+          const parts = [projects.length ? `${projects.length} proyecto(s) traspasado(s)` : '', toReview.length ? `${toReview.length} propuesta(s) reasignada(s)` : '',
+            moved ? `${moved} actividad(es) reasignada(s)` : '', own.length ? `${own.length} propuesta(s) cancelada(s)` : ''].filter(Boolean);
+          return 'Usuario eliminado.' + (parts.length ? ' ' + parts.join(', ') + '.' : '');
+        },
+      });
     });
   }
 
