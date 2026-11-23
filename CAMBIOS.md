@@ -1,5 +1,26 @@
 # URPMP · Versión 3 (sin evaluador)
 
+## Versión 3.16
+**Para actualizar:** corre `supabase/instalar_todo.sql`, vuelve a publicar la función **asistente** (nuevo `index.ts`) y reemplaza `src/`.
+- **Actividades canceladas ocultas:** en la pestaña Actividades del proyecto ya no aparecen dentro de los hitos. Al final hay un botón
+  «Mostrar actividades canceladas (n)» que las despliega (con su hito) y «Ocultar» para esconderlas otra vez.
+- **Documentos «Solo investigadores» y la IA:** si un estudiante pregunta por algo que está en un documento oculto, el asistente le avisa
+  que esa información la marcó como «Solo investigadores» su investigador responsable y que se la pida a él. Nunca le da el título ni el
+  contenido del documento (tampoco en el modo sin IA). Si pregunta en general por los documentos, le dice cuántos están ocultos.
+- **Chat de la IA por cuenta:** al cerrar sesión o entrar con otra cuenta en el mismo navegador, se limpia el chat en pantalla; una
+  respuesta que llegue tarde ya no se muestra ni se guarda en el historial de la otra cuenta.
+- **Tarjetas de propuestas en color:** toda la tarjeta toma el color de su estado: verde aprobada, amarillo en revisión, azul cambios
+  solicitados, rojo rechazada y gris cancelada (la etiqueta «Cancelada» ahora es gris para distinguirla de «Rechazada»).
+
+## Versión 3.15.1 · Asistente cuando Gemini está saturado
+Solo cambia `supabase/functions/asistente/index.ts` (no hay que correr SQL ni volver a publicar la app).
+- Si Google responde «503 high demand», el asistente ya no se rinde al primer intento: prueba los 4 modelos de Gemini,
+  espera unos segundos y hace hasta dos vueltas más (máximo ~30 s).
+- Si aun así no hay respuesta, el aviso ahora dice en español que Gemini está saturado y que se intente en unos minutos.
+- **Nuevo (opcional):** secreto `AI_FALLBACK_KEY` con una segunda clave de IA, p. ej. una clave gratuita de Groq (`gsk_…`,
+  console.groq.com → API Keys). Si Gemini está saturado, responde con esa. `AI_FALLBACK_MODEL` permite fijar su modelo.
+- Para aplicar: Supabase → Edge Functions → asistente → reemplaza el código por el nuevo `index.ts` → Deploy.
+
 ## Cómo actualizar
 1. Supabase → SQL Editor → pega **todo** `supabase/instalar_todo.sql` → Run. No borra datos y convierte lo que ya existe.
 2. Reemplaza la carpeta `src/` y publica como siempre.

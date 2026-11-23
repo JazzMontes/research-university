@@ -1,0 +1,41 @@
+KIT DE PRUEBAS · RESEARCH UNIVERSITY (versión 3.15)
+===================================================
+
+Novedades que prueba: varios archivos a la vez con título automático, fechas
+estimadas y opcionales, hito que se aplaza solo, recordatorios, Calendario y
+color por proyecto (pasos marcados en el proyecto 01, el 03 y los casos 99).
+
+Qué hay aquí
+------------
+GUIA_DE_PRUEBAS.docx        Paso a paso: quién hace qué, con qué archivo y qué debe pasar.
+CASOS_DE_PRUEBA.xlsx        La misma lista para ir marcando Sí/No (y los usuarios).
+CARGA_RAPIDA_USUARIOS.sql   Opcional: crea los 10 usuarios de golpe (contraseña temporal Prueba2026).
+
+00_Comunes                  Reglamento y guía (Fuentes institucionales) y fotos de perfil.
+01_Calidad_del_agua         Camino feliz completo, versiones de documentos, cierre y reporte.
+02_App_de_reciclaje         Cambios solicitados y solicitud de cambio de investigador.
+03_Huertos_urbanos          Propuesta de investigador, permisos a estudiante, arrastrar actividades, cierre con cambios.
+04_Energia_solar            Editar antes de revisión, cambiar investigador directo, propuesta rechazada.
+05_Biodiversidad_de_aves    Propuesta de Coordinación, retirar integrante, cancelar/reabrir, desactivar/eliminar cuenta.
+06_Salud_mental_universitaria  Cancelar una propuesta aprobada y reactivarla; solicitud que se cierra sola.
+99_Casos_de_error           Archivo de más de 5 MB, formato no permitido, nombre con ñ, PDF de 25 páginas.
+
+Cada carpeta de proyecto trae DATOS_PARA_CAPTURAR.txt con el título, descripción,
+objetivos (con «* » para probar las viñetas) y el plan de hitos y actividades.
+
+Usuarios (Jazz = Coordinación, tu cuenta)
+-----------------------------------------
+Estudiante    diana               diana.ejemplo@gmail.com
+Investigador  alejo               alejo.ejemplo@gmail.com
+Estudiante    emanuel             emanuel.ejemplo@gmail.com
+Coordinación  coordinador2        coordinador2.ejemplo@gmail.com
+Investigador  investigador2       investigador2.ejemplo@gmail.com
+Investigador  investigador3       investigador3.ejemplo@gmail.com
+Estudiante    estudiante1         estudiante1.ejemplo@gmail.com
+Estudiante    estudiante2         estudiante2.ejemplo@gmail.com
+Estudiante    estudiante3         estudiante3.ejemplo@gmail.com
+Estudiante    estudiante4         estudiante4.ejemplo@gmail.com
+
+Los correos son de ejemplo (usuario.ejemplo@gmail.com). Los códigos de recuperación
+de contraseña NO te llegarían: para probar esa parte, pon tu correo en una cuenta
+(ver «Casos de error» en la guía).

@@ -303,7 +303,7 @@
           </form>
           <div class="record-cards scroll-box">
             @for (p of proposals; track p.id) {
-              <a class="record-card" [routerLink]="['/app/proposals', p.id]">
+              <a class="record-card status-card" [class]="'record-card status-card st-' + p.status" [routerLink]="['/app/proposals', p.id]">
                 <div><h2>{{ p.title }}</h2><p>{{ p.author_name }} · Responsable: {{ p.researcher_name }}</p><small>Registrada el {{ date(p.created_at) }}</small></div>
                 <span class="badge" [class]="'badge tone-' + status('proposal', p.status).tone">{{ status('proposal', p.status).label }}</span>
               </a>
@@ -589,6 +589,21 @@
                     </a>
                   } @empty {
                     <p class="muted empty-group">{{ g.milestone ? (dragActivity ? 'Suelta aquí la actividad.' : 'Este hito todavía no tiene actividades.') : (dragActivity ? 'Suelta aquí para dejarla sin hito.' : 'Todavía no hay actividades.') }}</p>
+                  }
+                </div>
+              }
+              @if (cancelledActivities.length) {
+                <div class="cancelled-block">
+                  <button type="button" class="text-button cancelled-toggle" (click)="showCancelledActivities = !showCancelledActivities" [attr.aria-expanded]="showCancelledActivities">
+                    <app-icon name="ban"></app-icon>{{ showCancelledActivities ? 'Ocultar' : 'Mostrar' }} actividades canceladas ({{ cancelledActivities.length }})
+                  </button>
+                  @if (showCancelledActivities) {
+                    @for (a of cancelledActivities; track a.id) {
+                      <a class="list-row muted-row" [routerLink]="['/app/activities', a.id]">
+                        <div><strong>{{ a.description }}</strong><small><app-icon name="user" [size]="13"></app-icon> {{ a.participant_name }}@if (milestoneName(a)) { · <app-icon name="flag" [size]="13"></app-icon>{{ milestoneName(a) }} }</small></div>
+                        <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
+                      </a>
+                    }
                   }
                 </div>
               }

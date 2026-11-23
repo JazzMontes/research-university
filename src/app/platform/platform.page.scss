@@ -132,6 +132,15 @@ main { min-width: 0; padding: 25px 38px 55px; }
 .record-card p { font-size: 14px; margin: 0 0 4px; }
 .record-card small { font-size: 12px; }
 .record-card:hover { border-color: #9fc6b9; }
+/* Propuestas: toda la tarjeta toma el color de su estado. */
+.status-card { border-left-width: 6px; }
+.status-card.st-approved { background: #eefaf2; border-color: var(--done-line); }
+.status-card.st-rejected { background: #fff0f0; border-color: var(--cancelled-line); }
+.status-card.st-cancelled { background: #f1f3f2; border-color: #b9c4bf; }
+.status-card.st-cancelled h2, .status-card.st-cancelled p { color: #5f6f69; }
+.status-card.st-changes_requested { background: #eef4ff; border-color: var(--changes-line); }
+.status-card.st-pending_researcher_review, .status-card.st-pending_coordinator { background: #fffaea; border-color: var(--progress-line); }
+.status-card:hover { filter: brightness(.98); }
 .empty { text-align: center; color: var(--muted); padding: 40px; background: white; border-radius: 10px; }
 .list-row, .file-row { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid #edf2ef; color: var(--ink); font-size: 14px; }
 .list-row:last-child, .file-row:last-child { border-bottom: 0; }
@@ -341,6 +350,8 @@ nav a.active app-icon { opacity: 1; }
 .milestone-group .list-row { padding: 12px 14px; }
 .milestone-group .list-row small app-icon { margin: 0 2px 0 0; }
 .empty-group { padding: 12px 14px; margin: 0; font-size: 13px; }
+.cancelled-block { margin-top: 14px; border-top: 1px dashed var(--line, #d9dde3); padding-top: 10px; }
+.cancelled-block .cancelled-toggle { color: var(--muted, #6b7280); }
 
 /* Vista previa del archivo elegido */
 .file-preview { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-top: 8px; background: #fafcfb; }

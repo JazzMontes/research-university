@@ -141,6 +141,13 @@ export class PlatformPage implements OnInit {
   attachment?: ChatAttachment;
   attachBusy = false;
   @ViewChild('chatScroll') chatScroll?: ElementRef<HTMLElement>;
+  /** Cuenta dueña del chat que está en pantalla: al cambiar de cuenta se limpia todo. */
+  private chatOwner = 0;
+  private resetChatState(): void {
+    this.messages = []; this.chatId = 0; this.chats = []; this.question = '';
+    this.attachment = undefined; this.historyOpen = false; this.asking = false;
+    this.chatOwner = this.me;
+  }
 
   // ---------- buscadores y campanita ----------
   activityFilter = '';
@@ -265,7 +272,7 @@ export class PlatformPage implements OnInit {
     this.project = undefined; this.activities = []; this.milestones = []; this.documents = []; this.history = [];
     this.versionsOf = 0; this.versions = [];
     this.activity = undefined; this.evidence = [];
-    this.activityFilter = ''; this.documentFilter = ''; this.notifOpen = false;
+    this.activityFilter = ''; this.documentFilter = ''; this.notifOpen = false; this.showCancelledActivities = false;
   }
 
   private async skipLoginIfActive(): Promise<void> {
@@ -328,6 +335,8 @@ export class PlatformPage implements OnInit {
           break;
         }
         case 'assistant':
+          // Otra cuenta en este navegador: no se muestra nada de lo que escribió la anterior.
+          if (this.chatOwner !== this.me) this.resetChatState();
           // Despierta la función de IA mientras la persona escribe su pregunta.
           void this.backend.callFunction('asistente', { ping: true }, 15000);
           await this.loadChats();
@@ -409,7 +418,8 @@ export class PlatformPage implements OnInit {
     try {
       await this.auth.logout();
       this.notifications.stop();
-      this.password = ''; this.username = ''; this.messages = []; this.dialog = undefined;
+      this.password = ''; this.username = ''; this.dialog = undefined;
+      this.resetChatState(); this.chatOwner = 0;
       await this.router.navigate(['/login'], { replaceUrl: true });
     } catch (error) {
       this.say(this.message(error, 'No se pudo cerrar sesión. Inténtalo de nuevo.'), 'error');
@@ -1505,8 +1515,15 @@ export class PlatformPage implements OnInit {
   }
 
   /** Plan de trabajo: cada hito con sus actividades y al final las que no tienen hito. */
+  /** Las canceladas quedan ocultas; se ven en su propio bloque al final con «Mostrar canceladas». */
+  showCancelledActivities = false;
+  milestoneName(a: Row): string {
+    const m = this.milestones.find(x => Number(x['id']) === Number(a['milestone_id']));
+    return m ? String(m['description']) : '';
+  }
+  get cancelledActivities(): Row[] { return this.visibleActivities.filter(a => a['status'] === 'cancelled'); }
   get activityGroups(): { milestone: Row | null; items: Row[] }[] {
-    const items = this.visibleActivities;
+    const items = this.visibleActivities.filter(a => a['status'] !== 'cancelled');
     const groups: { milestone: Row | null; items: Row[] }[] = this.milestones.map(m => ({
       milestone: m, items: items.filter(a => Number(a['milestone_id']) === Number(m['id'])) }));
     const loose = items.filter(a => !a['milestone_id']);
@@ -1954,6 +1971,8 @@ export class PlatformPage implements OnInit {
 
   async ask(): Promise<void> {
     if ((!this.question.trim() && !this.attachment) || this.asking || this.attachBusy) return;
+    const owner = this.me;
+    this.chatOwner = owner;
     const attachment = this.attachment;
     const question = this.question.trim() || `Revisa el archivo «${attachment!.name}» y dime de qué trata.`;
     this.question = '';
@@ -1976,6 +1995,7 @@ export class PlatformPage implements OnInit {
       const payload: Row = { question, mode: 'ask', history, stream: true };
       if (attachment) payload['attachment'] = { name: attachment.name, mime: attachment.mime, data: attachment.data, text: attachment.text };
       const connected = await this.backend.streamFunction('asistente', payload, event => {
+        if (this.me !== owner) return; // se cerró sesión o cambió la cuenta a media respuesta
         if (event.type === 'delta') { received = true; reply.text += event.text; reply.html = this.rich(reply.text); this.scrollChat(); }
         else if (event.type === 'final') { received = true; reply.text = event.answer || ''; sources = event.sources || []; notice = event.notice || ''; }
         else if (event.type === 'done') {
@@ -2012,6 +2032,7 @@ export class PlatformPage implements OnInit {
       this.scrollChat();
       this.changeDetector.markForCheck();
     }
+    if (this.me !== owner) return; // nunca se guarda en el historial de otra cuenta
     if (answered) await this.saveExchange(question, reply.text, replySources, attachment?.name);
   }
 

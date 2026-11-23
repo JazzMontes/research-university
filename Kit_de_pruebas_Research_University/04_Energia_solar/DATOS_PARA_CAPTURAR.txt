@@ -1,0 +1,24 @@
+DATOS PARA CAPTURAR — Paneles solares para reducir el consumo eléctrico en escuelas primarias
+======================================================================
+
+Copia y pega cada bloque en el formulario «Nueva propuesta».
+
+TÍTULO:
+Paneles solares para reducir el consumo eléctrico en escuelas primarias
+
+DESCRIPCIÓN:
+Estudio de factibilidad para instalar paneles fotovoltaicos en tres escuelas primarias públicas, comparando su consumo eléctrico de 12 meses con la generación solar estimada y el costo de la inversión.
+
+OBJETIVOS (escríbelos con «* » al inicio: la app los convierte en viñetas):
+* Analizar 12 meses de recibos de luz de 3 escuelas
+* Estimar la generación solar con datos de irradiación local
+* Calcular el periodo de recuperación de la inversión
+
+INVESTIGADOR RESPONSABLE A ELEGIR: Investigador 3
+
+QUIÉN LA REGISTRA: Estudiante 3 (usuario estudiante3)
+
+CAMINO QUE SE PRUEBA:
+La estudiante EDITA su propuesta antes de que la revisen → CAMBIA de investigador ella misma (sin Coordinación) → el nuevo investigador la RECHAZA.
+
+Los pasos detallados están en GUIA_DE_PRUEBAS.docx (y en CASOS_DE_PRUEBA.xlsx para ir marcando).

@@ -52,7 +52,7 @@ const STATUS: Record<StatusKind, Record<string, StatusInfo>> = {
     changes_requested: { label: 'Cambios solicitados', tone: 'changes' },
     approved: { label: 'Aprobada', tone: 'done' },
     rejected: { label: 'Rechazada', tone: 'cancelled' },
-    cancelled: { label: 'Cancelada', tone: 'cancelled' },
+    cancelled: { label: 'Cancelada', tone: 'neutral' }, // gris: distinta de «Rechazada» (rojo)
   },
   activity: {
     pending: { label: 'Pendiente', tone: 'progress' },

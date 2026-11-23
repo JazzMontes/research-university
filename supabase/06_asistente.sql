@@ -98,7 +98,7 @@ set search_path = research, extensions, pg_temp as $$
 declare
   question text; v_mode text; scope integer[]; chosen integer[]; terms text[]; q tsquery;
   structured text := ''; proposals_text text := ''; fragments jsonb := '[]'; sources jsonb := '[]';
-  f record; n integer := 0; max_projects integer;
+  f record; n integer := 0; max_projects integer; hidden_text text := ''; asks_docs boolean;
 begin
   question := research.req_text(d, 'question', 2000);
   v_mode := coalesce(nullif(d ->> 'mode', ''), 'ask');
@@ -177,6 +177,28 @@ begin
     end loop;
   end if;
 
+  -- Estudiantes: documentos «Solo investigadores» de sus proyectos. Nunca se manda su título ni su contenido,
+  -- solo cuántos hay y si coinciden con la pregunta, para que la IA avise que el investigador los ocultó.
+  if u.role = 'student' and cardinality(scope) > 0 then
+    asks_docs := research.normalize_search(question) ~ '(document|archivo|reporte|informe|entrevista|version|oculto|investigador)';
+    select coalesce(string_agg(format('- Proyecto «%s»: %s documento(s) que el investigador responsable (%s) marcó como «Solo investigadores»%s.',
+             x.title, x.total, x.researcher, case when x.matching > 0 then format('; %s de ellos tiene información relacionada con esta pregunta', x.matching) else '' end),
+             E'\n' order by x.matching desc, x.title), '')
+      into hidden_text
+      from (
+        select pr.title, r.name as researcher, count(*) as total,
+               count(*) filter (where
+                 (q is not null and exists (select 1 from research.document_chunks c where c.document_id = dd.id and c.tsv @@ q))
+                 or exists (select 1 from unnest(terms) t where research.normalize_search(dd.title) like '%' || t || '%')) as matching
+        from research.documents dd
+        join research.projects pr on pr.id = dd.project_id
+        join research.users r on r.id = pr.responsible_researcher_id
+        where dd.deleted_at is null and dd.kind <> 'institutional' and dd.restricted = 1 and dd.project_id = any(scope)
+        group by pr.id, pr.title, r.name
+      ) x
+      where x.matching > 0 or asks_docs;
+  end if;
+
   for f in select value from jsonb_array_elements(fragments) loop
     sources := sources || jsonb_build_object('reference', f.value ->> 'reference', 'type', 'document',
       'document_id', (f.value ->> 'document_id')::int, 'title', f.value ->> 'title', 'version', (f.value ->> 'version')::int,
@@ -194,7 +216,8 @@ begin
       'accessible_projects', cardinality(scope), 'included_projects', cardinality(chosen),
       'permission', case u.role when 'coordinator' then 'Coordinación: puede consultar cualquier proyecto del sistema.'
         else research.role_label(u.role) || ': solo los proyectos en los que participa.' end),
-    'structured', structured, 'proposals', proposals_text, 'fragments', fragments, 'sources', sources);
+    'structured', structured, 'proposals', proposals_text, 'fragments', fragments, 'sources', sources,
+    'hidden_documents', hidden_text);
 end $$;
 
 -- ------------------------------------------------------------------
@@ -256,6 +279,10 @@ begin
              order by value ->> 'document_id', (value ->> 'reference')::int limit 3 loop
       answer := answer || format(E'• Documento «%s»: «%s» [%s]\n', f ->> 'title', research.cut(regexp_replace(f ->> 'text', '\s+', ' ', 'g'), 450), f ->> 'reference');
     end loop;
+  end if;
+  if coalesce(ctx ->> 'hidden_documents', '') like '%relacionada con esta pregunta%' and jsonb_array_length(ctx -> 'fragments') = 0 then
+    answer := answer || 'Parte de esa información está en documentos que el investigador responsable marcó como «Solo investigadores», '
+      || 'por eso no te la puedo compartir. Si la necesitas, pídesela a tu investigador:' || E'\n' || (ctx ->> 'hidden_documents') || E'\n\n';
   end if;
   if btrim(answer) = '' then
     if coalesce(ctx ->> 'structured', '') <> '' then

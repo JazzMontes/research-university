@@ -1,0 +1,43 @@
+DATOS PARA CAPTURAR — Calidad del agua en comunidades rurales de la Sierra Norte
+======================================================================
+
+Copia y pega cada bloque en el formulario «Nueva propuesta».
+
+TÍTULO:
+Calidad del agua en comunidades rurales de la Sierra Norte
+
+DESCRIPCIÓN:
+Las comunidades de San Juan, El Roble y La Loma se abastecen de manantiales y pozos que nunca se han analizado. El proyecto medirá parámetros físico-químicos y bacteriológicos del agua durante tres meses para identificar riesgos a la salud y proponer medidas de potabilización de bajo costo.
+
+OBJETIVOS (escríbelos con «* » al inicio: la app los convierte en viñetas):
+* Medir pH, turbiedad, cloro residual y coliformes en 12 puntos de muestreo
+* Comparar los resultados con la NOM-127-SSA1-2021
+* Proponer al menos dos alternativas de potabilización de bajo costo
+* Presentar los resultados a las autoridades comunitarias
+
+INVESTIGADOR RESPONSABLE A ELEGIR: Alejo
+
+QUIÉN LA REGISTRA: Diana (usuario diana)
+
+PLAN DE TRABAJO (hitos y actividades para crear en el proyecto):
+
+  HITO: Diseño del muestreo  — fecha meta (opcional): hoy + 20 días
+    • Revisar la NOM-127 y normatividad aplicable  — fecha estimada (opcional): hoy + 13 días
+    • Definir y georreferenciar los puntos de muestreo  — fecha estimada (opcional): hoy + 16 días
+
+  HITO: Trabajo de campo  — fecha meta (opcional): hoy + 60 días
+    • Tomar muestras en San Juan y El Roble  — fecha estimada (opcional): hoy + 53 días
+    • Tomar muestras en La Loma  — fecha estimada (opcional): hoy + 56 días
+    • Capturar resultados del laboratorio  — fecha estimada (opcional): hoy + 59 días
+
+  HITO: Informe final  — fecha meta (opcional): hoy + 90 días
+    • Redactar el informe final  — fecha estimada (opcional): hoy + 83 días
+    • Presentar resultados a la comunidad  — fecha estimada (opcional): hoy + 86 días
+
+Las fechas son ESTIMADAS y opcionales: puedes dejar alguna actividad sin fecha.
+Si una actividad tiene fecha después de la meta de su hito, el hito se aplaza solo.
+
+CAMINO QUE SE PRUEBA:
+Camino feliz completo: propuesta → aprobación del investigador → proyecto → hitos y actividades → evidencias → cierre aprobado → reporte PDF.
+
+Los pasos detallados están en GUIA_DE_PRUEBAS.docx (y en CASOS_DE_PRUEBA.xlsx para ir marcando).

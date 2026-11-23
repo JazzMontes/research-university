@@ -1,0 +1,33 @@
+DATOS PARA CAPTURAR — Bienestar emocional y hábitos de sueño en estudiantes universitarios
+======================================================================
+
+Copia y pega cada bloque en el formulario «Nueva propuesta».
+
+TÍTULO:
+Bienestar emocional y hábitos de sueño en estudiantes universitarios
+
+DESCRIPCIÓN:
+Encuesta anónima a 300 estudiantes de licenciatura sobre horas de sueño, estrés académico y bienestar emocional, para proponer estrategias de apoyo desde tutorías.
+
+OBJETIVOS (escríbelos con «* » al inicio: la app los convierte en viñetas):
+* Aplicar una encuesta validada a 300 estudiantes
+* Relacionar horas de sueño con niveles de estrés
+* Proponer 3 estrategias de apoyo a tutorías
+
+INVESTIGADOR RESPONSABLE A ELEGIR: Investigador 2
+
+QUIÉN LA REGISTRA: Estudiante 2 (usuario estudiante2)
+
+PLAN DE TRABAJO (hitos y actividades para crear en el proyecto):
+
+  HITO: Encuesta  — fecha meta (opcional): hoy + 40 días
+    • Validar el cuestionario  — fecha estimada (opcional): hoy + 33 días
+    • Aplicar la encuesta en línea  — fecha estimada (opcional): hoy + 36 días
+
+Las fechas son ESTIMADAS y opcionales: puedes dejar alguna actividad sin fecha.
+Si una actividad tiene fecha después de la meta de su hito, el hito se aplaza solo.
+
+CAMINO QUE SE PRUEBA:
+Propuesta aprobada → el estudiante pide cambio de investigador → luego CANCELA la propuesta aprobada (se cancela el proyecto y la solicitud se cierra sola) → la reactiva (el proyecto se reabre).
+
+Los pasos detallados están en GUIA_DE_PRUEBAS.docx (y en CASOS_DE_PRUEBA.xlsx para ir marcando).

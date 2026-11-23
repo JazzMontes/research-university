@@ -1,0 +1,35 @@
+DATOS PARA CAPTURAR — Monitoreo de aves en el Parque Ecológico Flor del Bosque
+======================================================================
+
+Copia y pega cada bloque en el formulario «Nueva propuesta».
+
+TÍTULO:
+Monitoreo de aves en el Parque Ecológico Flor del Bosque
+
+DESCRIPCIÓN:
+Censo mensual de aves residentes y migratorias en tres senderos del parque, para crear una línea base de biodiversidad y una guía de campo para visitantes.
+
+OBJETIVOS (escríbelos con «* » al inicio: la app los convierte en viñetas):
+* Realizar 6 conteos mensuales en 3 senderos
+* Identificar al menos 40 especies
+* Publicar una guía de campo ilustrada
+
+JUSTIFICACIÓN (solo Coordinación):
+El parque firmó un convenio con la universidad que vence este año; el monitoreo debe iniciar de inmediato para aprovechar la temporada de aves migratorias (noviembre a marzo).
+
+QUIÉN LA REGISTRA: Coordinador 2 (usuario coordinador2)
+
+PLAN DE TRABAJO (hitos y actividades para crear en el proyecto):
+
+  HITO: Conteos de temporada  — fecha meta (opcional): hoy + 60 días
+    • Conteo sendero Encinos  — fecha estimada (opcional): hoy + 53 días
+    • Conteo sendero Cañada  — fecha estimada (opcional): hoy + 56 días
+    • Conteo sendero Mirador  — fecha estimada (opcional): hoy + 59 días
+
+Las fechas son ESTIMADAS y opcionales: puedes dejar alguna actividad sin fecha.
+Si una actividad tiene fecha después de la meta de su hito, el hito se aplaza solo.
+
+CAMINO QUE SE PRUEBA:
+Propuesta de COORDINACIÓN con justificación → se vuelve proyecto al instante → retirar a un integrante (sus actividades pasan a otra persona) → cancelar y reabrir el proyecto → desactivar y eliminar una cuenta.
+
+Los pasos detallados están en GUIA_DE_PRUEBAS.docx (y en CASOS_DE_PRUEBA.xlsx para ir marcando).

@@ -1,0 +1,37 @@
+DATOS PARA CAPTURAR — EcoPuntos: app para fomentar el reciclaje en escuelas secundarias
+======================================================================
+
+Copia y pega cada bloque en el formulario «Nueva propuesta».
+
+TÍTULO:
+EcoPuntos: app para fomentar el reciclaje en escuelas secundarias
+
+DESCRIPCIÓN:
+Aplicación móvil que asigna puntos a los estudiantes por cada kilo de material reciclable que entregan en su escuela. Los puntos se canjean por beneficios escolares. Se piloteará en dos secundarias de Puebla durante un semestre.
+
+OBJETIVOS (escríbelos con «* » al inicio: la app los convierte en viñetas):
+* Diseñar la app con al menos 5 pantallas principales
+* Pilotear en 2 secundarias con 200 estudiantes
+* Aumentar 30 % el material reciclado respecto al semestre anterior
+
+INVESTIGADOR RESPONSABLE A ELEGIR: Investigador 2
+
+QUIÉN LA REGISTRA: Emanuel (usuario emanuel)
+
+PLAN DE TRABAJO (hitos y actividades para crear en el proyecto):
+
+  HITO: Diseño de la app  — fecha meta (opcional): hoy + 30 días
+    • Encuesta a estudiantes  — fecha estimada (opcional): hoy + 23 días
+    • Diseñar las pantallas (mockups)  — fecha estimada (opcional): hoy + 26 días
+
+  HITO: Piloto  — fecha meta (opcional): hoy + 100 días
+    • Instalar centros de acopio  — fecha estimada (opcional): hoy + 93 días
+    • Registrar kilos reciclados por semana  — fecha estimada (opcional): hoy + 96 días
+
+Las fechas son ESTIMADAS y opcionales: puedes dejar alguna actividad sin fecha.
+Si una actividad tiene fecha después de la meta de su hito, el hito se aplaza solo.
+
+CAMINO QUE SE PRUEBA:
+Cambios solicitados → corrección con archivo nuevo (v2) → aprobada → el estudiante solicita cambio de investigador y Coordinación lo aprueba.
+
+Los pasos detallados están en GUIA_DE_PRUEBAS.docx (y en CASOS_DE_PRUEBA.xlsx para ir marcando).
