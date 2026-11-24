@@ -1,5 +1,26 @@
 # URPMP · Versión 3 (sin evaluador)
 
+## Versión 3.20 · Lenguaje incluyente
+**Para actualizar:** corre `supabase/instalar_todo.sql`, vuelve a publicar la función **asistente** y reemplaza `src/`.
+- Roles y textos con forma incluyente en toda la app, los avisos, los mensajes de error y el asistente:
+  **Investigador(a), Coordinador(a), Autor(a), Creador(a)** (Estudiante, Responsable, Integrante y Suplente ya eran neutros).
+- Los nombres de rol en Usuarios, Perfil y listas ahora dicen «Investigador(a)» y «Coordinador(a)».
+- Los roles ya guardados en los equipos se actualizan solos al correr el script («Investigador(a) responsable», «Autor(a) de la propuesta»).
+- El asistente usa formas incluyentes o el nombre de la persona.
+- La bienvenida del inicio de sesión dice «¡Qué gusto verte de nuevo!».
+
+## Versión 3.19 · Salir del proyecto sin reasignar
+**Para actualizar:** corre `supabase/instalar_todo.sql`, vuelve a publicar la función **asistente** y reemplaza `src/`.
+- **Integrantes que salen** (estudiantes o investigadores que no son el responsable): ya no eligen a quién pasan sus
+  actividades. Se quedan pendientes con la etiqueta **«Sin responsable»** y llega un aviso al investigador responsable y al
+  creador (o su suplente) con la lista de actividades que dejó.
+- En la pestaña Actividades aparece el recuadro **«N actividad(es) sin responsable»** con «Asignar a…» y «Cancelar».
+  Lo pueden usar el responsable, quien gestiona el plan y el creador (este último aunque le hayan quitado los permisos del
+  plan, solo para esas actividades). La persona asignada recibe aviso.
+- Al **retirar** a alguien (lo hace el responsable) se sigue eligiendo quién recibe sus actividades.
+- Recordatorio de lo que ya traía la 3.18: etiquetas **Responsable** y **Creador(a) / Suplente del creador** en Equipo; solo
+  el creador o su suplente pide el cambio de investigador responsable; al rechazar una solicitud no se puede elegir investigador.
+
 ## Versión 3.18 · Creador del proyecto y documentos ocultos a estudiantes
 **Para actualizar:** corre `supabase/instalar_todo.sql`, vuelve a publicar la función **asistente** y reemplaza `src/`.
 - **«Oculto a estudiantes»** (antes «Solo investigadores»): el nombre ahora dice lo que pasa. Esos documentos los ven los
@@ -17,6 +38,13 @@
   al resolver, aprueba con el investigador propuesto o elige a otro, o rechaza (el responsable sigue igual).
   Al aprobarse: el nuevo responsable entra al equipo, recibe las actividades pendientes del anterior y, si el anterior
   había creado el proyecto, también queda como creador(a). El anterior deja el equipo y recibe aviso.
+- **Suplente del creador:** cuando quien creó el proyecto sale, él mismo elige a su suplente, que queda con los mismos
+  derechos (permisos del plan y ser la única persona que solicita el cambio de investigador responsable). El investigador
+  responsable ya no puede retirar del equipo al creador ni a su suplente.
+- **Etiquetas en Equipo:** «Responsable», y «Creador(a)» o «Suplente del creador».
+- **Decisiones que bloquean campos:** al resolver una solicitud, si eliges «Rechazar» se bloquea la lista para escoger al
+  nuevo investigador (solo se activa con «Aprobar»), y no se manda nada de ese campo.
+- Se usa el mismo nombre en toda la app: «cambio de investigador responsable».
 - Los proyectos que ya existían toman como creador(a) al autor de su propuesta; sus permisos no se cambian.
 
 ## Versión 3.17 · Eventos en el calendario

@@ -3,8 +3,8 @@ export type Role = 'student' | 'researcher' | 'coordinator';
 
 export const ROLE_LABELS: Record<Role, string> = {
   student: 'Estudiante',
-  researcher: 'Investigador',
-  coordinator: 'Coordinador',
+  researcher: 'Investigador(a)',
+  coordinator: 'Coordinador(a)',
 };
 
 export interface Section { key: string; title: string; roles: Role[]; menu: boolean; icon: string; }
@@ -47,7 +47,7 @@ const STATUS: Record<StatusKind, Record<string, StatusInfo>> = {
     cancelled: { label: 'Cancelado', tone: 'cancelled' },
   },
   proposal: {
-    pending_researcher_review: { label: 'En revisión del investigador', tone: 'progress' },
+    pending_researcher_review: { label: 'En revisión del investigador(a)', tone: 'progress' },
     pending_coordinator: { label: 'En revisión de Coordinación', tone: 'progress' },
     changes_requested: { label: 'Cambios solicitados', tone: 'changes' },
     approved: { label: 'Aprobada', tone: 'done' },

@@ -63,7 +63,7 @@ create table if not exists research.proposals (
 );
 
 -- Versión 3: flujo sin evaluador.
---  returns_to: a quién regresa la propuesta cuando el autor corrige (investigador o Coordinación).
+--  returns_to: a quién regresa la propuesta cuando el autor(a) corrige (investigador(a) o Coordinación).
 --  status_before_cancel: estado al que vuelve si se reactiva una propuesta cancelada por error.
 alter table research.proposals add column if not exists returns_to varchar(50);
 alter table research.proposals add column if not exists status_before_cancel varchar(50);
@@ -116,7 +116,7 @@ create table if not exists research.participants (
   unique (project_id, user_id)
 );
 alter table research.participants add column if not exists project_role varchar(80);
--- El investigador responsable puede darle a un integrante permiso para gestionar el plan de trabajo.
+-- El investigador(a) responsable puede darle a un integrante permiso para gestionar el plan de trabajo.
 alter table research.participants add column if not exists can_manage smallint not null default 0;
 
 create table if not exists research.activities (
@@ -249,7 +249,7 @@ alter table research.users drop constraint if exists users_role_check;
 alter table research.projects drop constraint if exists projects_status_check;
 alter table research.activities drop constraint if exists activities_status_check;
 
--- Las cuentas de evaluador pasan a investigador INACTIVO: Coordinación decide si las reactiva.
+-- Las cuentas de evaluador pasan a investigador(a) INACTIVO: Coordinación decide si las reactiva.
 update research.users set role = 'researcher', status = 'inactive', updated_at = now() where role = 'evaluator';
 update research.user_sessions set revoked_at = now()
   where revoked_at is null and user_id in (select id from research.users where status = 'inactive');
@@ -288,7 +288,7 @@ alter table research.activities add constraint activities_status_check
 
 -- =====================================================================
 -- Versión 3.11: Coordinación como investigadora, archivos en propuestas,
--- solicitudes de cambio de investigador, borrar usuarios y notificaciones.
+-- solicitudes de cambio de investigador(a), borrar usuarios y notificaciones.
 -- =====================================================================
 alter table research.proposals add column if not exists justification text;
 alter table research.users add column if not exists deleted_at timestamptz;
@@ -395,17 +395,22 @@ create index if not exists calendar_events_date_idx on research.calendar_events 
 alter table research.calendar_events enable row level security;
 
 -- =====================================================================
--- Creador del proyecto: quien registró la propuesta. Solo esa persona pide el cambio de investigador;
+-- Creador(a) del proyecto: quien registró la propuesta. Solo esa persona pide el cambio de investigador(a);
 -- si sale del equipo, deja a otra persona como creadora.
 -- =====================================================================
 alter table research.projects add column if not exists creator_id integer references research.users(id) on delete set null;
 update research.projects pr set creator_id = p.author_id
   from research.proposals p where p.id = pr.proposal_id and pr.creator_id is null;
 
--- Tipo de solicitud: 'change' (el creador pide otro responsable) o 'leave' (el responsable pide salir y propone reemplazo).
+-- Tipo de solicitud: 'change' (el creador(a) pide otro responsable) o 'leave' (el responsable pide salir y propone reemplazo).
 alter table research.researcher_change_requests add column if not exists kind varchar(10) not null default 'change';
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'rcr_kind_check') then
     alter table research.researcher_change_requests add constraint rcr_kind_check check (kind in ('change', 'leave'));
   end if;
 end $$;
+
+-- Lenguaje incluyente en los roles dentro del proyecto (v3.20).
+update research.participants set project_role = 'Investigador(a) responsable' where project_role = 'Investigador responsable';
+update research.participants set project_role = 'Investigador(a)' where project_role = 'Investigador';
+update research.participants set project_role = 'Autor(a) de la propuesta' where project_role = 'Autor de la propuesta';

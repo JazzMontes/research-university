@@ -4,7 +4,7 @@
 -- 3 Busca la información (RAG): documentos, descripción del proyecto,
 --   actividades, hitos y participantes · 4 Genera respuesta con citas.
 --
--- Permisos: Coordinador → cualquier proyecto. Investigador y Estudiante →
+-- Permisos: Coordinador(a) → cualquier proyecto. Investigador(a) y Estudiante →
 -- solo proyectos en los que participan.
 -- Todos → fuentes institucionales. Los filtros se aplican ANTES de leer texto.
 --
@@ -61,7 +61,7 @@ returns text language sql immutable as $$
     when 'pending' then 'Pendiente' when 'in_review' then 'En revisión'
     when 'completed' then 'Completada' when 'achieved' then 'Alcanzado' when 'approved' then 'Aprobada'
     when 'rejected' then 'Rechazada' when 'changes_requested' then 'Cambios solicitados'
-    when 'pending_researcher_review' then 'En revisión del investigador' when 'pending_coordinator' then 'En revisión de Coordinación'
+    when 'pending_researcher_review' then 'En revisión del investigador(a)' when 'pending_coordinator' then 'En revisión de Coordinación'
     else coalesce(s, '') end;
 $$;
 
@@ -127,7 +127,7 @@ begin
   end loop;
 
   -- Propuestas visibles (estado del flujo de aprobación).
-  select coalesce(string_agg(format('- Propuesta «%s» — estado: %s%s — autor: %s — investigador responsable: %s%s',
+  select coalesce(string_agg(format('- Propuesta «%s» — estado: %s%s — autor(a): %s — investigador(a) responsable: %s%s',
       x.title, research.status_label(x.status), '',
       au.name, rr.name,
       coalesce(' — última observación: ' || research.cut((select h.details from research.proposal_history h where h.proposal_id = x.id
@@ -187,10 +187,10 @@ begin
     where e.event_date between research.today() and research.today() + 90 and research.event_visible(u, e);
 
   -- Estudiantes: documentos ocultos a estudiantes en sus proyectos. Nunca se manda su título ni su contenido,
-  -- solo cuántos hay y si coinciden con la pregunta, para que la IA avise que el investigador los ocultó.
+  -- solo cuántos hay y si coinciden con la pregunta, para que la IA avise que el investigador(a) los ocultó.
   if u.role = 'student' and cardinality(scope) > 0 then
-    asks_docs := research.normalize_search(question) ~ '(document|archivo|reporte|informe|entrevista|version|oculto|investigador)';
-    select coalesce(string_agg(format('- Proyecto «%s»: %s documento(s) que el investigador responsable (%s) ocultó a los estudiantes (solo los ven investigadores y Coordinación)%s.',
+    asks_docs := research.normalize_search(question) ~ '(document|archivo|reporte|informe|entrevista|version|oculto|investigador(a))';
+    select coalesce(string_agg(format('- Proyecto «%s»: %s documento(s) que el investigador(a) responsable (%s) ocultó a los estudiantes (solo los ven investigadores y Coordinación)%s.',
              x.title, x.total, x.researcher, case when x.matching > 0 then format('; %s de ellos tiene información relacionada con esta pregunta', x.matching) else '' end),
              E'\n' order by x.matching desc, x.title), '')
       into hidden_text
@@ -290,8 +290,8 @@ begin
     end loop;
   end if;
   if coalesce(ctx ->> 'hidden_documents', '') like '%relacionada con esta pregunta%' and jsonb_array_length(ctx -> 'fragments') = 0 then
-    answer := answer || 'Parte de esa información está en documentos que el investigador responsable ocultó a los estudiantes (solo los ven los investigadores del proyecto y Coordinación), '
-      || 'por eso no te la puedo compartir. Si la necesitas, pídesela a tu investigador:' || E'\n' || (ctx ->> 'hidden_documents') || E'\n\n';
+    answer := answer || 'Parte de esa información está en documentos que el investigador(a) responsable ocultó a los estudiantes (solo los ven los investigadores del proyecto y Coordinación), '
+      || 'por eso no te la puedo compartir. Si la necesitas, pídesela a tu investigador(a):' || E'\n' || (ctx ->> 'hidden_documents') || E'\n\n';
   end if;
   if btrim(answer) = '' then
     if coalesce(ctx ->> 'structured', '') <> '' then

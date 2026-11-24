@@ -38,6 +38,8 @@ export interface DialogField {
   required?: boolean;
   /** Obligatorio solo en ciertos casos (p. ej. observaciones al pedir cambios). */
   requiredWhen?: (values: Row) => boolean;
+  /** Bloqueado en ciertos casos (p. ej. no se elige investigador(a) si la decisión es rechazar). */
+  disabledWhen?: (values: Row) => boolean;
   options?: Option[];
   hint?: string;
   /** Texto gris dentro de la caja que desaparece al escribir. */
@@ -546,25 +548,25 @@ export class PlatformPage implements OnInit {
   // Permisos que la interfaz muestra (el servidor vuelve a validarlos)
   // =====================================================================
   get projectEditable(): boolean { return ['active', 'changes'].includes(this.project?.['status']); }
-  /** Investigador o Coordinación que actúa como investigadora. */
+  /** Investigador(a) o Coordinación que actúa como investigadora. */
   get canResearch(): boolean { return this.role === 'researcher' || this.role === 'coordinator'; }
   get isLead(): boolean { return this.canResearch && Number(this.project?.['responsible_researcher_id']) === this.me; }
   get canRequestProjectChange(): boolean {
-    // Solo quien creó el proyecto (quien registró la propuesta) pide el cambio de investigador.
+    // Solo quien creó el proyecto (quien registró la propuesta) pide el cambio de investigador(a).
     return this.isMember && !this.isLead && !!this.project?.['is_creator'] && ['active', 'changes', 'closing'].includes(this.project?.['status']) && !this.project?.['change_request'];
   }
   get canLeaveProject(): boolean {
     // El responsable también puede salir, pero lo aprueba Coordinación (y no si ya hay una solicitud pendiente).
     return this.isMember && this.projectEditable && (!this.isLead || !this.project?.['change_request']);
   }
-  /** Estudiante autor (mientras sea propuesta) o Coordinación cambian al investigador directamente. */
+  /** Estudiante autor(a) (mientras sea propuesta) o Coordinación cambian al investigador(a) directamente. */
   get canChangeProposalResearcher(): boolean {
     const p = this.proposal;
     if (!p) return false;
     if (this.role === 'coordinator') return !['approved', 'rejected', 'cancelled'].includes(p['status']);
     return this.isAuthor && this.role === 'student' && ['pending_researcher_review', 'changes_requested'].includes(p['status']);
   }
-  /** El autor puede editar mientras nadie la ha revisado. */
+  /** El autor(a) puede editar mientras nadie la ha revisado. */
   get canEditProposal(): boolean {
     return !!this.proposal && this.isAuthor && ['pending_researcher_review', 'pending_coordinator'].includes(this.proposal['status']);
   }
@@ -591,7 +593,7 @@ export class PlatformPage implements OnInit {
     return !!this.proposal && (this.isAuthor || this.role === 'coordinator') &&
       !['rejected', 'cancelled'].includes(this.proposal['status']) && this.proposal['project_status'] !== 'finalized';
   }
-  /** El autor borra su propuesta mientras no sea proyecto; Coordinación puede borrar cualquiera. */
+  /** El autor(a) borra su propuesta mientras no sea proyecto; Coordinación puede borrar cualquiera. */
   get canDeleteProposal(): boolean {
     const p = this.proposal;
     return !!p && (this.role === 'coordinator' || (this.isAuthor && !p['project_id']));
@@ -623,7 +625,7 @@ export class PlatformPage implements OnInit {
     const p = this.proposal;
     if (!p) return '';
     if (p['status'] === 'approved') return 'Esta propuesta ya es un proyecto: al cancelarla también se cancela el proyecto y el equipo ya no podrá trabajar en él. Nada se borra y se puede reactivar.';
-    return 'Dejará de revisarse. Nada se borra: el autor o Coordinación pueden reactivarla y volverá al punto donde estaba.';
+    return 'Dejará de revisarse. Nada se borra: el autor(a) o Coordinación pueden reactivarla y volverá al punto donde estaba.';
   }
   get proposalWaitingOn(): string {
     const p = this.proposal;
@@ -636,7 +638,7 @@ export class PlatformPage implements OnInit {
 
   get activityLead(): boolean { return this.canResearch && Number(this.activity?.['lead_id']) === this.me; }
   get activityManage(): boolean { return this.activityLead || !!this.activity?.['i_can_manage']; }
-  /** Nadie revisa su propia entrega, salvo el investigador responsable. */
+  /** Nadie revisa su propia entrega, salvo el investigador(a) responsable. */
   get activityCanReview(): boolean { return this.activityManage && (this.activityLead || !this.activityMine); }
   get activityMine(): boolean { return Number(this.activity?.['participant_id']) === this.me; }
   get activityEditable(): boolean { return ['active', 'changes'].includes(this.activity?.['project_status']); }
@@ -680,7 +682,8 @@ export class PlatformPage implements OnInit {
     }
   }
   closeDialog(): void { if (!this.saving) this.dialog = undefined; }
-  isRequired(field: DialogField): boolean { return !!field.required || !!field.requiredWhen?.(this.dialog?.values || {}); }
+  isDisabled(field: DialogField): boolean { return !!field.disabledWhen?.(this.dialog?.values || {}); }
+  isRequired(field: DialogField): boolean { return !this.isDisabled(field) && (!!field.required || !!field.requiredWhen?.(this.dialog?.values || {})); }
   toggleCheck(field: DialogField, value: string, checked: boolean): void {
     const list: string[] = this.dialog!.values[field.key];
     this.dialog!.values[field.key] = checked ? [...list, value] : list.filter(item => item !== value);
@@ -893,6 +896,8 @@ export class PlatformPage implements OnInit {
       return Array.isArray(value) ? value.length === 0 : String(value ?? '').trim() === '';
     });
     if (missing.length) { this.dialogError = 'Completa: ' + missing.map(field => field.label).join(', ') + '.'; return; }
+    // Lo bloqueado no se manda (por ejemplo, el investigador(a) elegido cuando se rechaza).
+    for (const field of dialog.fields) { if (this.isDisabled(field)) delete values[field.key]; }
     for (const field of dialog.fields) {
       const value = String(values[field.key] ?? '').trim();
       if (field.type === 'password' && value && !PASSWORD_RULE.test(value)) {
@@ -971,7 +976,7 @@ export class PlatformPage implements OnInit {
         { key: 'objectives', label: 'Objetivos', type: 'textarea', required: true },
       ];
       if (this.role === 'student') {
-        fields.push({ key: 'responsible_researcher_id', label: 'Investigador responsable', type: 'select', required: true,
+        fields.push({ key: 'responsible_researcher_id', label: 'Investigador(a) responsable', type: 'select', required: true,
           options: await this.options('catalogs/researchers.php', {}), hint: 'Será quien revise tu propuesta y dirija el proyecto.' });
       }
       if (this.role === 'coordinator') {
@@ -981,8 +986,8 @@ export class PlatformPage implements OnInit {
       fields.push({ key: 'file', label: 'Archivo (opcional)', type: 'file', hint: 'PDF, Word, Excel, PowerPoint, imagen o texto. Máximo 5 MB.' });
       this.openDialog({
         title: 'Nueva propuesta', confirmLabel: this.role === 'coordinator' ? 'Crear proyecto' : 'Enviar propuesta', fields, values: {},
-        intro: this.role === 'student' ? 'Se enviará al investigador que elijas. Si la aprueba, se convierte en proyecto. Mientras no la revise, puedes editarla.'
-          : this.role === 'researcher' ? 'Como investigador, tu propuesta pasa directo a Coordinación.'
+        intro: this.role === 'student' ? 'Se enviará al investigador(a) que elijas. Si la aprueba, se convierte en proyecto. Mientras no la revise, puedes editarla.'
+          : this.role === 'researcher' ? 'Como investigador(a), tu propuesta pasa directo a Coordinación.'
           : 'Como Coordinación, tu propuesta se aprueba en ese momento y se convierte en proyecto contigo como responsable.',
         submit: async (values, file) => {
           const body: Row = { ...values, ...(await this.fileBody(file)) };
@@ -1001,29 +1006,29 @@ export class PlatformPage implements OnInit {
     void this.withOptions(async () => {
       const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(p['responsible_researcher_id']));
       this.openDialog({
-        title: 'Cambiar investigador responsable', confirmLabel: 'Cambiar', values: {},
+        title: 'Cambiar investigador(a) responsable', confirmLabel: 'Cambiar', values: {},
         intro: `Ahora el responsable es «${p['researcher_name']}». ` + (p['status'] === 'pending_researcher_review'
-          ? 'La propuesta pasará a la bandeja del nuevo investigador para que la revise.' : 'El nuevo investigador revisará la propuesta cuando la reenvíes.'),
+          ? 'La propuesta pasará a la bandeja del nuevo investigador(a) para que la revise.' : 'El nuevo investigador(a) revisará la propuesta cuando la reenvíes.'),
         fields: [
-          { key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', required: true, options },
+          { key: 'researcher_id', label: 'Nuevo investigador(a) responsable', type: 'select', required: true, options },
           { key: 'reason', label: 'Motivo (opcional)', type: 'textarea' },
         ],
-        submit: async values => { await this.post('proposals/change-researcher.php', { proposal_id: p['id'], ...values }); return 'Investigador actualizado.'; },
+        submit: async values => { await this.post('proposals/change-researcher.php', { proposal_id: p['id'], ...values }); return 'Investigador(a) actualizado.'; },
       });
     });
   }
 
-  /** Integrante de un proyecto en curso: pide a Coordinación otro investigador responsable (lo elige él). */
+  /** Integrante de un proyecto en curso: pide a Coordinación otro investigador(a) responsable (lo elige él). */
   requestResearcherChange(): void {
     const item = this.project!;
     void this.withOptions(async () => {
       const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(item['responsible_researcher_id']));
       this.openDialog({
-        title: 'Solicitar cambio de investigador', confirmLabel: 'Enviar solicitud', values: {},
+        title: 'Solicitar cambio de investigador(a) responsable', confirmLabel: 'Enviar solicitud', values: {},
         intro: `Coordinación aprobará o rechazará el cambio. Mientras tanto, «${item['researcher_name']}» sigue como responsable.`,
         fields: [
-          { key: 'proposed_researcher_id', label: 'Nuevo investigador responsable', type: 'select', required: true, options },
-          { key: 'reason', label: '¿Por qué quieres cambiar de investigador?', type: 'textarea', required: true },
+          { key: 'proposed_researcher_id', label: 'Nuevo investigador(a) responsable', type: 'select', required: true, options },
+          { key: 'reason', label: '¿Por qué quieres cambiar de investigador(a)?', type: 'textarea', required: true },
         ],
         submit: async values => {
           await this.post('changes/request.php', { project_id: item['id'], reason: values['reason'], proposed_researcher_id: values['proposed_researcher_id'] });
@@ -1038,7 +1043,7 @@ export class PlatformPage implements OnInit {
   /** Texto de la solicitud: «quiere cambiar a X por Y». */
   changeRequestText(r: Row): string {
     if (r['kind'] === 'leave') return `${r['requester_name']} (responsable) quiere salir del proyecto y propone a «${r['proposed_name']}» en su lugar.`;
-    return `${r['requester_name']} quiere cambiar a «${r['current_name']}» por «${r['proposed_name'] || 'otro investigador'}» como responsable.`;
+    return `${r['requester_name']} quiere cambiar a «${r['current_name']}» por «${r['proposed_name'] || 'otro investigador(a)'}» como responsable.`;
   }
   private changeRequestClosed(r: Row): string {
     const st = r['target_status'];
@@ -1048,7 +1053,7 @@ export class PlatformPage implements OnInit {
     return '';
   }
 
-  /** Coordinación aprueba o rechaza: el nuevo investigador ya lo eligió quien pidió el cambio. */
+  /** Coordinación aprueba o rechaza: el nuevo investigador(a) ya lo eligió quien pidió el cambio. */
   reviewChangeRequest(request: Row): void {
     const closed = this.changeRequestClosed(request);
     if (closed) {
@@ -1065,15 +1070,16 @@ export class PlatformPage implements OnInit {
       const options = legacy || leave ? (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(request['current_researcher_id'])) : [];
       if (leave) {
         this.openDialog({
-          title: 'Salida del investigador responsable', confirmLabel: 'Guardar decisión',
+          title: 'Salida del investigador(a) responsable', confirmLabel: 'Guardar decisión',
           values: { researcher_id: String(request['proposed_researcher_id'] || '') },
           intro: `«${request['target_title']}»: ${this.changeRequestText(request)} Motivo: ${request['reason']}`,
           fields: [
             { key: 'decision', label: 'Decisión', type: 'choice', required: true, options: [
               { value: 'approved', label: 'Aprobar la salida y asignar al nuevo responsable' },
               { value: 'rejected', label: `Rechazar: «${request['current_name']}» sigue como responsable` }] },
-            { key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', options,
-              requiredWhen: (v: Row) => v['decision'] === 'approved', hint: 'Viene el que propuso; puedes elegir a otro, del equipo o que no haya estado.' },
+            { key: 'researcher_id', label: 'Nuevo investigador(a) responsable', type: 'select', options,
+              requiredWhen: (v: Row) => v['decision'] === 'approved', disabledWhen: (v: Row) => v['decision'] !== 'approved',
+              hint: 'Viene el que propuso; puedes elegir a otro, del equipo o que no haya estado. Se activa al elegir «Aprobar».' },
             { key: 'note', label: 'Nota para quien lo pidió', type: 'textarea', requiredWhen: v => v['decision'] === 'rejected' },
           ],
           submit: async values => {
@@ -1086,14 +1092,15 @@ export class PlatformPage implements OnInit {
         return;
       }
       this.openDialog({
-        title: 'Solicitud de cambio de investigador', confirmLabel: 'Guardar decisión', values: {},
+        title: 'Solicitud de cambio de investigador(a)', confirmLabel: 'Guardar decisión', values: {},
         intro: `«${request['target_title']}»: ${this.changeRequestText(request)} Motivo: ${request['reason']}`,
         fields: [
           { key: 'decision', label: 'Decisión', type: 'choice', required: true, options: [
             { value: 'approved', label: legacy ? 'Aprobar el cambio' : `Aprobar: «${request['proposed_name']}» será el nuevo responsable` },
             { value: 'rejected', label: `Rechazar: «${request['current_name']}» sigue como responsable` }] },
-          ...(legacy ? [{ key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select' as const, options,
-            requiredWhen: (v: Row) => v['decision'] === 'approved', hint: 'Esta solicitud es anterior y no indica a quién se quiere.' }] : []),
+          ...(legacy ? [{ key: 'researcher_id', label: 'Nuevo investigador(a) responsable', type: 'select' as const, options,
+            requiredWhen: (v: Row) => v['decision'] === 'approved', disabledWhen: (v: Row) => v['decision'] !== 'approved',
+            hint: 'Esta solicitud es anterior y no indica a quién se quiere.' }] : []),
           { key: 'note', label: 'Nota para quien lo pidió', type: 'textarea', requiredWhen: v => v['decision'] === 'rejected' },
         ],
         submit: async values => {
@@ -1106,7 +1113,7 @@ export class PlatformPage implements OnInit {
             if (/ya no aplica|ya se resolvió/i.test(msg)) return msg;
             throw error;
           }
-          return values['decision'] === 'approved' ? 'Investigador cambiado.' : 'Solicitud rechazada.';
+          return values['decision'] === 'approved' ? 'Investigador(a) cambiado.' : 'Solicitud rechazada.';
         },
       });
     });
@@ -1122,21 +1129,21 @@ export class PlatformPage implements OnInit {
     const byCoordination = p['status'] === 'pending_coordinator';
     this.openDialog({
       title: 'Revisar propuesta', confirmLabel: 'Guardar decisión', values: {},
-      intro: 'Si apruebas, el proyecto se crea en ese momento con ' + (byCoordination ? 'el investigador como responsable.' : 'el autor en el equipo y tú como responsable.'),
+      intro: 'Si apruebas, el proyecto se crea en ese momento con ' + (byCoordination ? 'el investigador(a) como responsable.' : 'el autor(a) en el equipo y tú como responsable.'),
       fields: [
         { key: 'decision', label: 'Decisión', type: 'choice', required: true, options: [
           { value: 'approved', label: 'Aprobar y crear el proyecto' },
-          { value: 'changes_requested', label: 'Solicitar cambios al autor' },
+          { value: 'changes_requested', label: 'Solicitar cambios al autor(a)' },
           { value: 'rejected', label: 'Rechazar (definitivo)' },
         ] },
-        { key: 'observations', label: 'Observaciones para el autor', type: 'textarea',
+        { key: 'observations', label: 'Observaciones para el autor(a)', type: 'textarea',
           requiredWhen: v => v['decision'] === 'changes_requested' || v['decision'] === 'rejected',
-          hint: 'Obligatorias al pedir cambios o rechazar: el autor las verá tal cual.' },
+          hint: 'Obligatorias al pedir cambios o rechazar: el autor(a) las verá tal cual.' },
       ],
       submit: async values => {
         const result = await this.post('proposals/review.php', { proposal_id: p['id'], ...values });
         if (result['project_id']) { void this.router.navigate(['/app/projects', result['project_id']]); return 'Propuesta aprobada: el proyecto ya está creado.'; }
-        return values['decision'] === 'rejected' ? 'Propuesta rechazada.' : 'Se pidieron cambios al autor.';
+        return values['decision'] === 'rejected' ? 'Propuesta rechazada.' : 'Se pidieron cambios al autor(a).';
       },
     });
   }
@@ -1151,16 +1158,16 @@ export class PlatformPage implements OnInit {
       ];
       const editing = p['status'] !== 'changes_requested';
       if (this.role === 'student') {
-        fields.push({ key: 'responsible_researcher_id', label: 'Investigador responsable', type: 'select', required: true,
+        fields.push({ key: 'responsible_researcher_id', label: 'Investigador(a) responsable', type: 'select', required: true,
           options: await this.options('catalogs/researchers.php', {}),
-          hint: 'Si lo cambias, la propuesta pasa a revisión del nuevo investigador.' });
+          hint: 'Si lo cambias, la propuesta pasa a revisión del nuevo investigador(a).' });
       }
       fields.push({ key: 'file', label: p['file'] ? 'Reemplazar archivo (opcional)' : 'Archivo (opcional)', type: 'file',
         hint: p['file'] ? `Actual: ${p['file']['filename']}. Si subes otro, queda como nueva versión.` : 'PDF, Word, Excel, imagen o texto. Máximo 5 MB.' });
       this.openDialog({
         title: editing ? 'Editar propuesta' : 'Corregir y reenviar', confirmLabel: editing ? 'Guardar cambios' : 'Guardar y reenviar', fields,
         intro: editing ? 'Todavía nadie la revisa, así que puedes corregirla. Quien la revise verá la versión nueva.'
-          : p['returns_to'] === 'pending_coordinator' ? 'Al guardar, regresa a Coordinación.' : 'Al guardar, regresa al investigador responsable.',
+          : p['returns_to'] === 'pending_coordinator' ? 'Al guardar, regresa a Coordinación.' : 'Al guardar, regresa al investigador(a) responsable.',
         values: { title: p['title'], description: p['description'], objectives: p['objectives'],
           responsible_researcher_id: String(p['responsible_researcher_id']) },
         submit: async (values, file) => {
@@ -1180,7 +1187,7 @@ export class PlatformPage implements OnInit {
       confirmLabel: p['status'] === 'approved' ? 'Sí, cancelar propuesta y proyecto' : 'Sí, cancelar propuesta',
       warning: `¿Segura que quieres cancelar «${p['title']}»? ${this.cancelConsequence}`,
       fields: [{ key: 'reason', label: 'Motivo de la cancelación', type: 'textarea', required: true,
-        placeholder: 'Ej.: Ya no se cuenta con los recursos para realizarla', hint: 'Lo verán el autor, el investigador responsable y el equipo.' }],
+        placeholder: 'Ej.: Ya no se cuenta con los recursos para realizarla', hint: 'Lo verán el autor(a), el investigador(a) responsable y el equipo.' }],
       submit: async values => {
         await this.post('proposals/cancel.php', { proposal_id: p['id'], ...values });
         return p['status'] === 'approved' ? 'Propuesta y proyecto cancelados.' : 'Propuesta cancelada.';
@@ -1200,7 +1207,7 @@ export class PlatformPage implements OnInit {
 
   proposalEvent(action: string): string {
     return ({
-      created: 'Propuesta registrada', resubmit: 'Corregida y reenviada', edited: 'Editada por el autor', researcher_changed: 'Cambio de investigador responsable', review_approved: 'Aprobada',
+      created: 'Propuesta registrada', resubmit: 'Corregida y reenviada', edited: 'Editada por el autor(a)', researcher_changed: 'Cambio de investigador(a) responsable', review_approved: 'Aprobada',
       review_changes_requested: 'Cambios solicitados', review_rejected: 'Rechazada', cancelled: 'Cancelada', reactivated: 'Reactivada',
       // Historial anterior a la versión 3:
       update: 'Correcciones guardadas', assign: 'Evaluador asignado', archived: 'Archivada', unarchived: 'Desarchivada',
@@ -1272,9 +1279,9 @@ export class PlatformPage implements OnInit {
     void this.withOptions(async () => {
       const options = (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(p['responsible_researcher_id']));
       this.openDialog({
-        title: 'Cambiar investigador responsable', confirmLabel: 'Cambiar responsable', values: {},
-        intro: `${p['researcher_name']} seguirá en el equipo como investigador y conservará su historial.`,
-        fields: [{ key: 'researcher_id', label: 'Nuevo investigador responsable', type: 'select', required: true, options }],
+        title: 'Cambiar investigador(a) responsable', confirmLabel: 'Cambiar responsable', values: {},
+        intro: `${p['researcher_name']} seguirá en el equipo como investigador(a) y conservará su historial.`,
+        fields: [{ key: 'researcher_id', label: 'Nuevo investigador(a) responsable', type: 'select', required: true, options }],
         submit: async values => { await this.post('projects/change-researcher.php', { project_id: p['id'], ...values }); return 'Responsable actualizado.'; },
       });
     });
@@ -1529,10 +1536,10 @@ export class PlatformPage implements OnInit {
     if (!+member['is_creator']) return [];
     const options = this.activeMembers.filter(m => m['user_id'] !== member['user_id'])
       .map(m => ({ value: String(m['user_id']), label: m['name'] + (this.isProjectLead(m) ? ' (responsable)' : '') }));
-    return [{ key: 'new_creator_id', label: 'Quién queda como creador(a) del proyecto', type: 'select', required: true, options,
-      hint: 'Recibe los permisos del plan de trabajo y será quien pueda solicitar el cambio de investigador.' }];
+    return [{ key: 'new_creator_id', label: 'Tu suplente', type: 'select', required: true, options,
+      hint: 'Recibe los permisos del plan de trabajo y será la única persona que pueda solicitar el cambio de investigador(a) responsable.' }];
   }
-  /** El responsable pide salir: propone a otro investigador (del equipo o no) y Coordinación aprueba o elige a otro. */
+  /** El responsable pide salir: propone a otro investigador(a) (del equipo o no) y Coordinación aprueba o elige a otro. */
   private leaveAsLead(): void {
     const p = this.project!;
     const team = new Set(this.activeMembers.map(m => String(m['user_id'])));
@@ -1543,10 +1550,10 @@ export class PlatformPage implements OnInit {
         .sort((a, b) => Number(team.has(b.value)) - Number(team.has(a.value)));
       this.openDialog({
         title: 'Salir del proyecto', confirmLabel: 'Enviar a Coordinación', values: {},
-        intro: `Eres el investigador responsable de «${p['title']}». Propón a quién dejas en tu lugar; Coordinación aprobará tu salida (puede elegir a otro investigador) o la rechazará. Mientras tanto sigues como responsable.`,
+        intro: `Eres el investigador(a) responsable de «${p['title']}». Propón a quién dejas en tu lugar; Coordinación aprobará tu salida (puede elegir a otro investigador(a)) o la rechazará. Mientras tanto sigues como responsable.`,
         fields: [
-          { key: 'proposed_researcher_id', label: 'Investigador que quedaría en tu lugar', type: 'select', required: true, options,
-            hint: 'Puede ser alguien del equipo o un investigador que no haya estado en el proyecto.' },
+          { key: 'proposed_researcher_id', label: 'Investigador(a) que quedaría en tu lugar', type: 'select', required: true, options,
+            hint: 'Puede ser alguien del equipo o un investigador(a) que no haya estado en el proyecto.' },
           { key: 'reason', label: '¿Por qué dejas el proyecto?', type: 'textarea', required: true },
         ],
         submit: async values => {
@@ -1562,20 +1569,40 @@ export class PlatformPage implements OnInit {
     const p = this.project!;
     const me = this.activeMembers.find(m => Number(m['user_id']) === Number(this.me)) || {};
     const pending = Number(me['pending_activities'] || 0);
-    const options = this.activeMembers.filter(m => Number(m['user_id']) !== Number(this.me))
-      .map(m => ({ value: String(m['user_id']), label: m['name'] + (this.isProjectLead(m) ? ' (responsable)' : '') }));
     this.openDialog({
-      title: 'Salir del proyecto', confirmLabel: 'Sí, salir', danger: true,
-      values: { reassign_to: String(p['responsible_researcher_id']) },
-      warning: `Dejarás de ver «${p['title']}». Tu trabajo y tu historial se conservan; el investigador responsable puede reincorporarte.`,
-      intro: (+me['is_creator'] ? 'Tú creaste este proyecto: elige quién queda como creador(a). ' : '')
-        + (pending ? `Tienes ${pending} actividad(es) sin terminar: elige quién las recibe.` : ''),
-      fields: [...this.creatorField(me), ...(pending ? [{ key: 'reassign_to', label: 'Tus actividades pasan a', type: 'select' as FieldType, required: true, options }] : [])],
+      title: 'Salir del proyecto', confirmLabel: 'Sí, salir', danger: true, values: {},
+      warning: `Dejarás de ver «${p['title']}». Tu trabajo y tu historial se conservan; el investigador(a) responsable puede reincorporarte.`,
+      intro: (+me['is_creator'] ? 'Tú eres quien puede pedir el cambio de investigador(a) responsable: elige a tu suplente. ' : '')
+        + (pending ? `Tienes ${pending} actividad(es) sin terminar: se quedan pendientes y se avisará al investigador(a) responsable y a quien creó el proyecto para que las asignen a alguien más o las cancelen.` : ''),
+      fields: [...this.creatorField(me)],
       submit: async values => {
         await this.post('participants/leave.php', { project_id: p['id'], ...values });
         this.router.navigateByUrl('/app/projects');
         return 'Saliste del proyecto.';
       },
+    });
+  }
+
+  /** Actividades abiertas de alguien que ya salió del equipo: el responsable, quien gestiona el plan o el creador(a) las reasigna o cancela. */
+  get orphanActivities(): Row[] {
+    return this.activities.filter(a => a['participant_active'] === false && ['pending', 'in_review', 'changes'].includes(a['status']));
+  }
+  get canFixOrphans(): boolean { return this.projectEditable && (this.canManagePlan || !!this.project?.['is_creator']); }
+  reassignActivity(a: Row): void {
+    const options = this.activeMembers.map(m => ({ value: String(m['user_id']), label: m['name'] + (this.isProjectLead(m) ? ' (responsable)' : '') }));
+    this.openDialog({
+      title: 'Asignar actividad', confirmLabel: 'Asignar', values: {},
+      intro: `«${a['description']}» era de ${a['participant_name']}, que ya no está en el equipo.`,
+      fields: [{ key: 'participant_id', label: 'Nueva persona responsable de la actividad', type: 'select', required: true, options }],
+      submit: async values => { await this.post('activities/reassign.php', { activity_id: a['id'], participant_id: values['participant_id'] }); return 'Actividad asignada.'; },
+    });
+  }
+  cancelOrphan(a: Row): void {
+    this.openDialog({
+      title: 'Cancelar actividad', confirmLabel: 'Sí, cancelar actividad', danger: true, values: {},
+      intro: `«${a['description']}» era de ${a['participant_name']}, que ya no está en el equipo.`,
+      fields: [{ key: 'reason', label: 'Motivo', type: 'textarea', required: true }],
+      submit: async values => { await this.post('activities/cancel.php', { activity_id: a['id'], reason: values['reason'] }); return 'Actividad cancelada.'; },
     });
   }
 
@@ -1588,9 +1615,8 @@ export class PlatformPage implements OnInit {
       title: 'Retirar del equipo', confirmLabel: 'Sí, retirar', danger: true,
       values: { reassign_to: String(p['responsible_researcher_id']) },
       warning: `${member['name']} ya no podrá ver el proyecto. Su historial se conserva y puedes reincorporarlo después.`,
-      intro: (+member['is_creator'] ? `${member['name']} creó este proyecto: elige quién queda como creador(a). ` : '')
-        + (pending ? `Tiene ${pending} actividad(es) sin terminar: elige quién las recibe.` : 'No tiene actividades pendientes.'),
-      fields: [...this.creatorField(member), ...(pending ? [{ key: 'reassign_to', label: 'Sus actividades pasan a', type: 'select' as FieldType, required: true, options }] : [])],
+      intro: (pending ? `Tiene ${pending} actividad(es) sin terminar: elige quién las recibe.` : 'No tiene actividades pendientes.'),
+      fields: [...(pending ? [{ key: 'reassign_to', label: 'Sus actividades pasan a', type: 'select' as FieldType, required: true, options }] : [])],
       submit: async values => {
         const result = await this.post('participants/remove.php', { project_id: p['id'], user_id: member['user_id'], ...values });
         return Number(result['activities_moved']) ? `Integrante retirado; se reasignaron ${result['activities_moved']} actividad(es).` : 'Integrante retirado.';
@@ -1965,14 +1991,14 @@ export class PlatformPage implements OnInit {
       const list = (rows: Row[]) => rows.map(r => `«${r['title']}»`).join(', ');
       const needsSuccessor = projects.length > 0 || toReview.length > 0;
       const notes: NonNullable<Dialog['notes']> = [];
-      if (projects.length) notes.push({ icon: 'folder', tone: 'warn', text: `Es investigador responsable de ${list(projects)}. Pasarán al investigador que elijas abajo; el resto del equipo se queda igual.` });
-      if (toReview.length) notes.push({ icon: 'proposal', tone: 'warn', text: `Tiene propuestas de estudiantes por revisar: ${toReview.map(r => `«${r['title']}» (de ${r['author']})`).join(', ')}. Las revisará el investigador que elijas.` });
+      if (projects.length) notes.push({ icon: 'folder', tone: 'warn', text: `Es investigador(a) responsable de ${list(projects)}. Pasarán al investigador(a) que elijas abajo; el resto del equipo se queda igual.` });
+      if (toReview.length) notes.push({ icon: 'proposal', tone: 'warn', text: `Tiene propuestas de estudiantes por revisar: ${toReview.map(r => `«${r['title']}» (de ${r['author']})`).join(', ')}. Las revisará el investigador(a) que elijas.` });
       for (const a of acts) {
         notes.push({ icon: 'tasks', tone: 'warn', text: `Tiene ${a['count']} actividad(es) sin terminar en «${a['title']}». Pasarán a ` +
           (a['lead_is_user'] ? 'quien elijas como nuevo responsable' : `«${a['goes_to']}», responsable del proyecto`) + ', que después puede reasignarlas.' });
       }
       if (own.length) notes.push({ icon: 'ban', tone: 'warn', text: `Sus propuestas en trámite ${list(own)} se cancelarán (quedan en el historial).` });
-      if (Number(impact['requests'])) notes.push({ icon: 'swap', tone: 'warn', text: `Sus ${impact['requests']} solicitud(es) de cambio de investigador pendientes se cerrarán.` });
+      if (Number(impact['requests'])) notes.push({ icon: 'swap', tone: 'warn', text: `Sus ${impact['requests']} solicitud(es) de cambio de investigador(a) pendientes se cerrarán.` });
       if (!notes.length) notes.push({ icon: 'check', tone: 'ok', text: 'No tiene trabajo pendiente: eliminarla no afecta a ningún proyecto ni propuesta.' });
       const options = needsSuccessor ? (await this.options('catalogs/researchers.php', {})).filter(o => o.value !== String(user['id'])) : [];
       const sameName = String(user['username']).toLowerCase() === String(user['name']).toLowerCase();
@@ -1983,8 +2009,8 @@ export class PlatformPage implements OnInit {
           'Si solo quieres quitarle el acceso por un tiempo, mejor desactiva la cuenta en Editar.',
         notesTitle: needsSuccessor || notes[0].tone === 'warn' ? 'Qué pasará con su trabajo pendiente' : 'Revisión de pendientes', notes,
         fields: [
-          ...(needsSuccessor ? [{ key: 'successor_id', label: 'Investigador que recibe sus proyectos y propuestas', type: 'select' as const, required: true, options,
-            hint: 'Puede ser un investigador o alguien de Coordinación.' }] : []),
+          ...(needsSuccessor ? [{ key: 'successor_id', label: 'Investigador(a) que recibe sus proyectos y propuestas', type: 'select' as const, required: true, options,
+            hint: 'Puede ser un investigador(a) o alguien de Coordinación.' }] : []),
           { key: 'confirm', label: 'Para confirmar, escribe la palabra ELIMINAR', type: 'text', required: true, placeholder: 'ELIMINAR' },
         ],
         submit: async values => {
@@ -2020,7 +2046,7 @@ export class PlatformPage implements OnInit {
     const key = `${event['entity']}:${event['action']}`;
     return ({
       'project:created_from_proposal': 'Proyecto creado desde la propuesta', 'project:configured': 'Datos del proyecto actualizados',
-      'project:change-researcher': 'Cambio de investigador responsable', 'project:cancelled': 'Proyecto cancelado',
+      'project:change-researcher': 'Cambio de investigador(a) responsable', 'project:cancelled': 'Proyecto cancelado',
       'project:reopened': 'Proyecto reabierto', 'participant:add': 'Integrante agregado', 'participant:update': 'Rol de integrante actualizado',
       'participant:remove': 'Integrante retirado', 'participant:leave': 'Integrante salió del proyecto', 'project:creator_changed': 'Nuevo creador(a) del proyecto', 'participant:permissions': 'Permisos del plan de trabajo', 'activity:create': 'Actividad creada', 'activity:update': 'Actividad editada',
       'activity:reassign': 'Actividad reasignada', 'activity:submit': 'Actividad entregada', 'activity:review': 'Entrega revisada',

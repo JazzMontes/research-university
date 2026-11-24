@@ -1,6 +1,6 @@
 -- =====================================================================
 -- URPMP · 05 · Documentos del proyecto, evidencias y fuentes institucionales (versión 3)
--- Eliminar: quien lo subió o el investigador responsable (ya no existe el "bloqueo").
+-- Eliminar: quien lo subió o el investigador(a) responsable (ya no existe el "bloqueo").
 -- Los archivos se guardan dentro de la base (máx. 5 MB) y su texto se divide
 -- en fragmentos indexados para el asistente de IA.
 -- =====================================================================
@@ -223,7 +223,7 @@ begin
       if coalesce(dd.created_by, 0) <> u.id then perform research.fail(403, 'Solo quien adjuntó la evidencia puede quitarla.'); end if;
       if a.status in ('completed', 'cancelled') then perform research.fail(409, 'La actividad ya está cerrada; sus evidencias se conservan.'); end if;
     elsif not institutional and coalesce(dd.created_by, 0) <> u.id and p.responsible_researcher_id <> u.id then
-      perform research.fail(403, 'Solo quien subió el documento o el investigador responsable pueden eliminarlo.');
+      perform research.fail(403, 'Solo quien subió el documento o el investigador(a) responsable pueden eliminarlo.');
     end if;
     update research.documents set deleted_at = now() where id = did;
     delete from research.document_chunks where document_id = did;

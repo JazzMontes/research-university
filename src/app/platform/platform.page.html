@@ -11,7 +11,7 @@
       <section class="login-panel">
         @if (loginMode === 'login') {
         <form class="login-card" (ngSubmit)="login()" [attr.aria-busy]="loginBusy">
-          <h2>Bienvenido de nuevo</h2><p>Continúa con tu investigación.</p>
+          <h2>¡Qué gusto verte de nuevo!</h2><p>Continúa con tu investigación.</p>
           <label for="username">Usuario</label>
           <input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false"
             [(ngModel)]="username" placeholder="Tu nombre de usuario" required [disabled]="loginBusy">
@@ -182,7 +182,7 @@
 
           @if (role === 'coordinator' && dash['change_requests']?.length) {
             <section class="panel">
-              <h2><app-icon name="swap"></app-icon>Solicitudes de cambio de investigador</h2>
+              <h2><app-icon name="swap"></app-icon>Solicitudes de cambio de investigador(a) responsable</h2>
               <div class="scroll-box short">
                 @for (r of dash['change_requests']; track r.id) {
                   <div class="list-row">
@@ -294,7 +294,7 @@
 
         <!-- ========================= PROPUESTAS ========================= -->
         } @else if (section === 'proposals' && !recordId) {
-          <div class="heading"><div><h1>Propuestas</h1><p>Del registro a la aprobación: investigador responsable → Coordinación.</p></div>
+          <div class="heading"><div><h1>Propuestas</h1><p>Del registro a la aprobación: investigador(a) responsable → Coordinación.</p></div>
             <button type="button" class="primary" (click)="newProposal()"><app-icon name="plus"></app-icon>Nueva propuesta</button></div>
           <div class="chips">@for (f of proposalFilterList; track f.value) { <button type="button" [class.active]="filter === f.value" (click)="setProposalFilter(f.value)">{{ f.label }}</button> }</div>
           <form class="filters" (ngSubmit)="searchProposals()">
@@ -328,7 +328,7 @@
           }
 
           @if (proposal['change_request']) {
-            <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>Solicitud de cambio de investigador pendiente</strong>
+            <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>Solicitud de cambio de investigador(a) pendiente</strong>
               <p [innerHTML]="fmt(changeRequestText(proposal['change_request']))"></p><p>Motivo: {{ proposal['change_request'].reason }}</p>
               @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(proposal['change_request'])"><app-icon name="review"></app-icon>Resolver solicitud</button> }
               @else { <small>Coordinación la revisará pronto.</small> }</div>
@@ -336,8 +336,8 @@
 
           <section class="panel">
             <dl class="details">
-              <div><dt>Autor</dt><dd>{{ proposal['author_name'] }} ({{ roleName(proposal['author_role']) }})</dd></div>
-              <div><dt>Investigador responsable</dt><dd>{{ proposal['researcher_name'] }}</dd></div>
+              <div><dt>Autor(a)</dt><dd>{{ proposal['author_name'] }} ({{ roleName(proposal['author_role']) }})</dd></div>
+              <div><dt>Investigador(a) responsable</dt><dd>{{ proposal['researcher_name'] }}</dd></div>
               <div><dt>Registrada</dt><dd>{{ date(proposal['created_at']) }}</dd></div>
               <div><dt>Última actualización</dt><dd>{{ date(proposal['updated_at']) }}</dd></div>
             </dl>
@@ -356,7 +356,7 @@
               @if (proposal['project_id']) { <a class="primary-link" [routerLink]="['/app/projects', proposal['project_id']]"><app-icon name="folder"></app-icon>Ir al proyecto</a> }
               @if (proposal['status'] === 'cancelled' && (isAuthor || role === 'coordinator')) { <button type="button" class="secondary" (click)="reactivateProposal()"><app-icon name="refresh"></app-icon>Reactivar</button> }
               @if (canChangeProposalResearcher) {
-                <button type="button" class="secondary" (click)="changeProposalResearcher()"><app-icon name="swap"></app-icon>Cambiar investigador</button>
+                <button type="button" class="secondary" (click)="changeProposalResearcher()"><app-icon name="swap"></app-icon>Cambiar investigador(a)</button>
               }
             </div>
           </section>
@@ -446,7 +446,7 @@
           }
 
           @if (project['change_request']) {
-            <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>{{ project['change_request'].kind === 'leave' ? 'El responsable pidió salir del proyecto' : 'Solicitud de cambio de investigador pendiente' }}</strong>
+            <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>{{ project['change_request'].kind === 'leave' ? 'El responsable pidió salir del proyecto' : 'Solicitud de cambio de investigador(a) responsable pendiente' }}</strong>
               <p [innerHTML]="fmt(changeRequestText(project['change_request']))"></p><p>Motivo: {{ project['change_request'].reason }}</p>
               @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(project['change_request'])"><app-icon name="review"></app-icon>Resolver solicitud</button> }
               @else { <small>Coordinación la revisará pronto.</small> }</div>
@@ -486,7 +486,7 @@
                 }
                 @if (role === 'coordinator' && project['status'] === 'closing') { <button type="button" class="primary" (click)="reviewClosure()"><app-icon name="review"></app-icon>Revisar cierre</button> }
                 @if (isLead || role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport()"><app-icon name="printer"></app-icon>Reporte del proyecto</button> }
-                @if (canRequestProjectChange) { <button type="button" class="secondary" (click)="requestResearcherChange()"><app-icon name="swap"></app-icon>Solicitar cambio de investigador</button> }
+                @if (canRequestProjectChange) { <button type="button" class="secondary" (click)="requestResearcherChange()"><app-icon name="swap"></app-icon>Solicitar cambio de investigador(a) responsable</button> }
                 @if (canLeaveProject) { <button type="button" class="danger-text" (click)="leaveProject()"><app-icon name="user-minus"></app-icon>Salir del proyecto</button> }
                 @if (role === 'coordinator' && ['active','changes','closing'].includes(project['status'])) {
                   <button type="button" class="secondary" (click)="changeResearcher()"><app-icon name="swap"></app-icon>Cambiar responsable</button>
@@ -515,12 +515,13 @@
                 <div class="list-row">
                   <div><strong>{{ m.name }}</strong><small>{{ m.project_role || roleName(m.role) }} · desde {{ date(m.joined_at) }}
                     @if (+m.pending_activities) { · {{ m.pending_activities }} actividad(es) abierta(s) }</small></div>
-                  @if (+m.is_creator) { <span class="badge tone-progress" title="Registró la propuesta; es quien puede solicitar el cambio de investigador"><app-icon name="star" [size]="13"></app-icon> Creador(a)</span> }
+                  @if (isProjectLead(m)) { <span class="badge tone-changes" title="Dirige el proyecto y revisa el trabajo del equipo"><app-icon name="flag" [size]="13"></app-icon> Responsable</span> }
+                  @if (+m.is_creator) { <span class="badge tone-progress" title="Única persona que puede solicitar el cambio de investigador(a) responsable"><app-icon name="star" [size]="13"></app-icon> {{ project['creator_is_author'] ? 'Creador(a)' : 'Suplente del creador(a)' }}</span> }
                   @if (+m.can_manage && !isProjectLead(m)) { <span class="badge tone-done" title="Puede crear y revisar actividades e hitos"><app-icon name="key" [size]="13"></app-icon> Gestiona el plan</span> }
                   @if (isLead && projectEditable && !isProjectLead(m)) {
                     <div class="row-actions"><button type="button" class="text-button" (click)="toggleManage(m)"><app-icon name="key"></app-icon>{{ +m.can_manage ? 'Quitar permisos' : 'Dar permisos' }}</button>
                     <button type="button" class="text-button" (click)="editMemberRole(m)"><app-icon name="edit"></app-icon>Cambiar rol</button>
-                    <button type="button" class="text-button danger-text" (click)="removeMember(m)"><app-icon name="user-minus"></app-icon>Retirar</button></div>
+                    @if (!+m.is_creator) { <button type="button" class="text-button danger-text" (click)="removeMember(m)"><app-icon name="user-minus"></app-icon>Retirar</button> }</div>
                   }
                 </div>
               }
@@ -545,6 +546,20 @@
               </div>
               <p class="muted plan-help">Organiza las actividades en hitos (etapas). Cada hito se marca como alcanzado solo cuando todas sus actividades están completadas.
                 @if (canManagePlan && projectEditable && milestones.length) { <br><app-icon name="swap" [size]="13"></app-icon> Arrastra una actividad sobre un hito para moverla. }</p>
+              @if (orphanActivities.length) {
+                <div class="callout tone-changes orphan-box"><strong><app-icon name="user-minus"></app-icon>{{ orphanActivities.length }} actividad(es) sin responsable</strong>
+                  <p>Quedaron pendientes porque su responsable salió del proyecto.@if (canFixOrphans) { Asígnalas a alguien del equipo o cancélalas. } @else { El investigador(a) responsable o quien creó el proyecto las asignará. }</p>
+                  @for (a of orphanActivities; track a.id) {
+                    <div class="list-row">
+                      <div><strong>{{ a.description }}</strong><small>Era de {{ a.participant_name }} · {{ dueText(a.deadline) }}</small></div>
+                      @if (canFixOrphans) {
+                        <div class="row-actions"><button type="button" class="secondary small" (click)="reassignActivity(a)"><app-icon name="user-plus"></app-icon>Asignar a…</button>
+                          <button type="button" class="text-button danger-text" (click)="cancelOrphan(a)"><app-icon name="ban"></app-icon>Cancelar</button></div>
+                      }
+                    </div>
+                  }
+                </div>
+              }
               @if (activities.length > 3) { <input class="tab-search" type="search" aria-label="Buscar actividad" [(ngModel)]="activityFilter" placeholder="Buscar actividad o responsable…"> }
               @for (g of activityGroups; track g.milestone?.id ?? 'none') {
                 <div class="milestone-group" [class.loose]="!g.milestone" [class.drop-here]="dropTarget === (g.milestone ? 'm' + g.milestone.id : 'none')"
@@ -587,6 +602,7 @@
                       @if (showDeadlineBadge(a.deadline_status)) {
                         <span class="badge" [class]="'badge tone-' + deadlineTone(a.deadline_status)">{{ a.deadline_status }}</span>
                       }
+                      @if (a.participant_active === false && a.status !== 'completed' && a.status !== 'cancelled') { <span class="badge tone-cancelled" title="Su responsable salió del proyecto">Sin responsable</span> }
                       <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span>
                     </a>
                   } @empty {
@@ -1067,12 +1083,12 @@
             } @else {
               <label [for]="'f_' + field.key">{{ field.label }}{{ isRequired(field) ? ' *' : '' }}</label>
               @if (field.type === 'select') {
-                <select [id]="'f_' + field.key" [name]="field.key" [(ngModel)]="dialog.values[field.key]">
+                <select [id]="'f_' + field.key" [name]="field.key" [(ngModel)]="dialog.values[field.key]" [disabled]="isDisabled(field)">
                   <option value="" disabled>Seleccionar…</option>
                   @for (o of field.options || []; track o.value) { <option [value]="o.value">{{ o.label }}</option> }
                 </select>
               } @else if (field.type === 'textarea') {
-                <textarea #area [id]="'f_' + field.key" [name]="field.key" rows="4" [(ngModel)]="dialog.values[field.key]" [placeholder]="field.placeholder || ''"
+                <textarea #area [id]="'f_' + field.key" [name]="field.key" rows="4" [(ngModel)]="dialog.values[field.key]" [placeholder]="field.placeholder || ''" [disabled]="isDisabled(field)"
                   (input)="bulletize(field, area)" (keydown.enter)="bulletEnter(field, $any($event))"></textarea>
                 @if (field.key === 'objectives') { <small class="hint">Escribe <strong>*</strong> y un espacio al inicio de la línea para hacer una viñeta (•).</small> }
               } @else if (field.type === 'file') {
@@ -1124,7 +1140,7 @@
                   <small class="strength" [class.ok]="passwordOk(dialog.values[field.key])">{{ passwordOk(dialog.values[field.key]) ? '✓ Contraseña válida' : 'Aún no cumple: 8+ caracteres, mayúscula, minúscula y número' }}</small>
                 }
               } @else {
-                <input [id]="'f_' + field.key" [name]="field.key" [type]="field.type" [attr.min]="field.min || null" [(ngModel)]="dialog.values[field.key]" [placeholder]="field.placeholder || ''"
+                <input [id]="'f_' + field.key" [name]="field.key" [type]="field.type" [attr.min]="field.min || null" [(ngModel)]="dialog.values[field.key]" [disabled]="isDisabled(field)" [placeholder]="field.placeholder || ''"
                   [attr.autocapitalize]="field.key === 'username' ? 'none' : null">
               }
             }

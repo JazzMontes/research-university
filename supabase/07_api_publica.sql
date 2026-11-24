@@ -31,7 +31,7 @@ returns text language sql immutable as $$
     when 'participants/permissions' then 'POST'
     when 'activities/list' then 'GET' when 'activities/detail' then 'GET'
     when 'activities/create' then 'POST' when 'activities/update' then 'POST' when 'activities/set-milestone' then 'POST' when 'activities/submit' then 'POST'
-    when 'activities/review' then 'POST' when 'activities/cancel' then 'POST'
+    when 'activities/review' then 'POST' when 'activities/cancel' then 'POST' when 'activities/reassign' then 'POST'
     when 'milestones/list' then 'GET' when 'milestones/create' then 'POST' when 'milestones/update' then 'POST'
     when 'milestones/delete' then 'POST' when 'milestones/assign' then 'POST'
     when 'documents/list' then 'GET' when 'documents/versions' then 'GET' when 'documents/download' then 'GET'

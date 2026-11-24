@@ -71,7 +71,7 @@ create table if not exists research.proposals (
 );
 
 -- Versión 3: flujo sin evaluador.
---  returns_to: a quién regresa la propuesta cuando el autor corrige (investigador o Coordinación).
+--  returns_to: a quién regresa la propuesta cuando el autor(a) corrige (investigador(a) o Coordinación).
 --  status_before_cancel: estado al que vuelve si se reactiva una propuesta cancelada por error.
 alter table research.proposals add column if not exists returns_to varchar(50);
 alter table research.proposals add column if not exists status_before_cancel varchar(50);
@@ -124,7 +124,7 @@ create table if not exists research.participants (
   unique (project_id, user_id)
 );
 alter table research.participants add column if not exists project_role varchar(80);
--- El investigador responsable puede darle a un integrante permiso para gestionar el plan de trabajo.
+-- El investigador(a) responsable puede darle a un integrante permiso para gestionar el plan de trabajo.
 alter table research.participants add column if not exists can_manage smallint not null default 0;
 
 create table if not exists research.activities (
@@ -257,7 +257,7 @@ alter table research.users drop constraint if exists users_role_check;
 alter table research.projects drop constraint if exists projects_status_check;
 alter table research.activities drop constraint if exists activities_status_check;
 
--- Las cuentas de evaluador pasan a investigador INACTIVO: Coordinación decide si las reactiva.
+-- Las cuentas de evaluador pasan a investigador(a) INACTIVO: Coordinación decide si las reactiva.
 update research.users set role = 'researcher', status = 'inactive', updated_at = now() where role = 'evaluator';
 update research.user_sessions set revoked_at = now()
   where revoked_at is null and user_id in (select id from research.users where status = 'inactive');
@@ -296,7 +296,7 @@ alter table research.activities add constraint activities_status_check
 
 -- =====================================================================
 -- Versión 3.11: Coordinación como investigadora, archivos en propuestas,
--- solicitudes de cambio de investigador, borrar usuarios y notificaciones.
+-- solicitudes de cambio de investigador(a), borrar usuarios y notificaciones.
 -- =====================================================================
 alter table research.proposals add column if not exists justification text;
 alter table research.users add column if not exists deleted_at timestamptz;
@@ -403,20 +403,25 @@ create index if not exists calendar_events_date_idx on research.calendar_events 
 alter table research.calendar_events enable row level security;
 
 -- =====================================================================
--- Creador del proyecto: quien registró la propuesta. Solo esa persona pide el cambio de investigador;
+-- Creador(a) del proyecto: quien registró la propuesta. Solo esa persona pide el cambio de investigador(a);
 -- si sale del equipo, deja a otra persona como creadora.
 -- =====================================================================
 alter table research.projects add column if not exists creator_id integer references research.users(id) on delete set null;
 update research.projects pr set creator_id = p.author_id
   from research.proposals p where p.id = pr.proposal_id and pr.creator_id is null;
 
--- Tipo de solicitud: 'change' (el creador pide otro responsable) o 'leave' (el responsable pide salir y propone reemplazo).
+-- Tipo de solicitud: 'change' (el creador(a) pide otro responsable) o 'leave' (el responsable pide salir y propone reemplazo).
 alter table research.researcher_change_requests add column if not exists kind varchar(10) not null default 'change';
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'rcr_kind_check') then
     alter table research.researcher_change_requests add constraint rcr_kind_check check (kind in ('change', 'leave'));
   end if;
 end $$;
+
+-- Lenguaje incluyente en los roles dentro del proyecto (v3.20).
+update research.participants set project_role = 'Investigador(a) responsable' where project_role = 'Investigador responsable';
+update research.participants set project_role = 'Investigador(a)' where project_role = 'Investigador';
+update research.participants set project_role = 'Autor(a) de la propuesta' where project_role = 'Autor de la propuesta';
 
 -- >>>>>>>>>> 02_nucleo.sql
 -- =====================================================================
@@ -447,9 +452,9 @@ returns text language sql immutable as $$
     when 'start_date' then 'Fecha de inicio' when 'end_date' then 'Fecha de término'
     when 'filename' then 'Archivo' when 'question' then 'Pregunta' when 'project_role' then 'Rol en el proyecto'
     when 'reason' then 'Motivo' when 'comment' then 'Comentario' when 'email' then 'Correo' when 'justification' then 'Justificación' when 'note' then 'Nota'
-    when 'responsible_researcher_id' then 'Investigador responsable' when 'participant_id' then 'Responsable'
-    when 'user_id' then 'Persona' when 'researcher_id' then 'Nuevo investigador' when 'reassign_to' then 'Quién recibe sus actividades'
-    when 'new_creator_id' then 'Nuevo creador del proyecto' when 'event_date' then 'Fecha del evento' when 'event_time' then 'Hora' when 'location' then 'Lugar' when 'event_id' then 'Evento' when 'project_id' then 'Proyecto'
+    when 'responsible_researcher_id' then 'Investigador(a) responsable' when 'participant_id' then 'Responsable'
+    when 'user_id' then 'Persona' when 'researcher_id' then 'Nuevo investigador(a)' when 'reassign_to' then 'Quién recibe sus actividades'
+    when 'new_creator_id' then 'Nuevo creador(a) del proyecto' when 'event_date' then 'Fecha del evento' when 'event_time' then 'Hora' when 'location' then 'Lugar' when 'event_id' then 'Evento' when 'project_id' then 'Proyecto'
     else null end, field);
 $$;
 
@@ -575,8 +580,8 @@ $$;
 
 create or replace function research.role_label(r text)
 returns text language sql immutable as $$
-  select case r when 'student' then 'Estudiante' when 'researcher' then 'Investigador'
-    when 'coordinator' then 'Coordinador' else r end;
+  select case r when 'student' then 'Estudiante' when 'researcher' then 'Investigador(a)'
+    when 'coordinator' then 'Coordinador(a)' else r end;
 $$;
 
 -- ------------------------------------------------------------------
@@ -687,7 +692,7 @@ set search_path = research, extensions, pg_temp as $$
 begin
   -- Coordinación también puede ser investigadora: administra SOLO los proyectos donde es responsable.
   if u.role not in ('researcher', 'coordinator') or p.responsible_researcher_id <> u.id then
-    perform research.fail(403, 'Solo el investigador responsable administra este proyecto.');
+    perform research.fail(403, 'Solo el investigador(a) responsable administra este proyecto.');
   end if;
 end $$;
 
@@ -708,7 +713,7 @@ returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
 begin
   if not research.can_manage(p, u) then
-    perform research.fail(403, 'Necesitas que el investigador responsable te dé permiso para gestionar el plan de trabajo.');
+    perform research.fail(403, 'Necesitas que el investigador(a) responsable te dé permiso para gestionar el plan de trabajo.');
   end if;
 end $$;
 
@@ -744,7 +749,7 @@ begin
   perform 1 from research.users where id = uid and status = 'active'
     and (role = r or (r = 'researcher' and role = 'coordinator')) for update;
   if not found then
-    perform research.fail(422, case when r = 'researcher' then 'Selecciona una cuenta activa de investigador o de Coordinación.'
+    perform research.fail(422, case when r = 'researcher' then 'Selecciona una cuenta activa de investigador(a) o de Coordinación.'
                                     else 'Selecciona una cuenta activa con rol ' || lower(research.role_label(r)) || '.' end);
   end if;
 end $$;
@@ -832,13 +837,13 @@ $$;
 -- =====================================================================
 -- URPMP · 03 · Usuarios, catálogos, propuestas y tablero (versión 3)
 -- Flujo de propuestas (sin evaluador):
---  Estudiante registra → Investigador responsable revisa y aprueba (se crea el proyecto).
---  Investigador registra su propia propuesta → Coordinación decide. Coordinación registra → proyecto directo.
+--  Estudiante registra → Investigador(a) responsable revisa y aprueba (se crea el proyecto).
+--  Investigador(a) registra su propia propuesta → Coordinación decide. Coordinación registra → proyecto directo.
 --  Quien revisa puede: Aprobar · Solicitar cambios · Rechazar.
 --  Cuando Coordinación aprueba se crea el proyecto automáticamente.
---  Con "Cambios solicitados" el autor corrige y reenvía en un solo paso;
+--  Con "Cambios solicitados" el autor(a) corrige y reenvía en un solo paso;
 --  la propuesta regresa a quien pidió los cambios.
---  El autor o Coordinación pueden cancelar (y reactivar si fue un error).
+--  El autor(a) o Coordinación pueden cancelar (y reactivar si fue un error).
 -- =====================================================================
 
 create or replace function research.user_json(t research.users)
@@ -874,12 +879,12 @@ begin
     select string_agg('«' || title || '»', ', ') into titles from research.projects
       where responsible_researcher_id = t.id and status in ('active', 'changes', 'closing');
     if titles is not null then
-      perform research.fail(409, 'Es investigador responsable de ' || titles || '. Primero cambia el responsable desde el proyecto.');
+      perform research.fail(409, 'Es investigador(a) responsable de ' || titles || '. Primero cambia el responsable desde el proyecto.');
     end if;
     select string_agg('«' || title || '»', ', ') into titles from research.proposals
       where responsible_researcher_id = t.id and author_id <> t.id and status = 'pending_researcher_review';
     if titles is not null then
-      perform research.fail(409, 'Tiene propuestas de estudiantes por revisar: ' || titles || '. Pídele que las revise o que el autor cancele.');
+      perform research.fail(409, 'Tiene propuestas de estudiantes por revisar: ' || titles || '. Pídele que las revise o que el autor(a) cancele.');
     end if;
   end if;
   if new_status = 'inactive' then
@@ -926,7 +931,7 @@ declare imp jsonb := research.user_impact(t); p research.projects; x research.pr
 begin
   why := 'Se eliminó la cuenta de ' || t.name;
   if (jsonb_array_length(imp -> 'projects') > 0 or jsonb_array_length(imp -> 'proposals_to_review') > 0) then
-    if successor is null then perform research.fail(422, 'Elige qué investigador recibe sus proyectos y propuestas.'); end if;
+    if successor is null then perform research.fail(422, 'Elige qué investigador(a) recibe sus proyectos y propuestas.'); end if;
     if successor = t.id then perform research.fail(422, 'Elige a otra persona: no puede recibirlos la misma cuenta que se elimina.'); end if;
     perform research.active_role(successor, 'researcher');
   end if;
@@ -934,7 +939,7 @@ begin
   for p in select * from research.projects where responsible_researcher_id = t.id and status in ('active', 'changes', 'closing') for update loop
     perform research.project_set_researcher(p, successor, actor, why);
   end loop;
-  -- 2) Propuestas de estudiantes que tenía por revisar → las revisa el nuevo investigador.
+  -- 2) Propuestas de estudiantes que tenía por revisar → las revisa el nuevo investigador(a).
   for x in select * from research.proposals where responsible_researcher_id = t.id and author_id <> t.id
            and status in ('pending_researcher_review', 'changes_requested') for update loop
     perform research.proposal_set_researcher(x, successor, actor, why);
@@ -942,12 +947,12 @@ begin
   -- 3) Sus propias propuestas en trámite se cancelan (se pueden consultar en el historial).
   for x in select * from research.proposals where author_id = t.id and status in ('pending_researcher_review', 'pending_coordinator', 'changes_requested') for update loop
     update research.proposals set status = 'cancelled', status_before_cancel = x.status, updated_at = now() where id = x.id;
-    perform research.proposal_history_add(x.id, actor, 'cancelled', x.status, 'cancelled', why || ' (autor).');
+    perform research.proposal_history_add(x.id, actor, 'cancelled', x.status, 'cancelled', why || ' (autor(a)).');
   end loop;
-  -- 4) Actividades sin terminar → al investigador responsable de cada proyecto (ya actualizado en el paso 1).
+  -- 4) Actividades sin terminar → al investigador(a) responsable de cada proyecto (ya actualizado en el paso 1).
   for a in select ac.id, ac.project_id, pr.responsible_researcher_id lead from research.activities ac join research.projects pr on pr.id = ac.project_id
            where ac.participant_id = t.id and ac.status in ('pending', 'in_review', 'changes') and pr.status in ('active', 'changes', 'closing') for update of ac loop
-    insert into research.participants (project_id, user_id, project_role) values (a.project_id, a.lead, 'Investigador responsable')
+    insert into research.participants (project_id, user_id, project_role) values (a.project_id, a.lead, 'Investigador(a) responsable')
       on conflict (project_id, user_id) do update set is_active = 1, removed_at = null;
     update research.activities set participant_id = a.lead, updated_at = now() where id = a.id;
     perform research.event_project(a.project_id, actor, 'activity', a.id, 'reassign', jsonb_build_object(
@@ -956,7 +961,7 @@ begin
   end loop;
   -- 5) Sale de los equipos y sus solicitudes pendientes se cierran solas.
   update research.participants set is_active = 0, removed_at = coalesce(removed_at, now()), can_manage = 0 where user_id = t.id and is_active = 1;
-  -- Si creó proyectos, otra persona del equipo queda como creadora (o el investigador responsable si no hay nadie más).
+  -- Si creó proyectos, otra persona del equipo queda como creadora (o el investigador(a) responsable si no hay nadie más).
   for a in select pr.* from research.projects pr where pr.creator_id = t.id loop
     perform research.project_set_creator(a.id, coalesce(
       (select pt.user_id from research.participants pt where pt.project_id = a.id and pt.is_active = 1 and pt.user_id <> a.responsible_researcher_id
@@ -1119,7 +1124,7 @@ set search_path = research, extensions, pg_temp as $$
     'change_request', (select to_jsonb(c) || jsonb_build_object('requester_name', x.name)
                        from research.researcher_change_requests c join research.users x on x.id = c.requested_by
                        where c.proposal_id = p.id and c.status = 'pending' order by c.id desc limit 1),
-    -- Última observación de quien revisó (se muestra al autor para corregir).
+    -- Última observación de quien revisó (se muestra al autor(a) para corregir).
     'last_observation', (select jsonb_build_object('details', h.details, 'actor_name', x.name, 'action', h.action, 'created_at', h.created_at)
                          from research.proposal_history h left join research.users x on x.id = h.actor_id
                          where h.proposal_id = p.id and h.details is not null
@@ -1141,14 +1146,14 @@ set search_path = research, extensions, pg_temp as $$
 declare new_project integer;
 begin
   if not exists (select 1 from research.users where id = p.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
-    perform research.fail(409, 'El investigador responsable ya no está activo. Cambia al responsable o solicita cambios al autor.');
+    perform research.fail(409, 'El investigador(a) responsable ya no está activo. Cambia al responsable o solicita cambios al autor(a).');
   end if;
   -- El proyecto inicia el día en que se aprueba la propuesta.
   insert into research.projects (proposal_id, title, description, objectives, responsible_researcher_id, start_date, creator_id)
     values (p.id, p.title, p.description, p.objectives, p.responsible_researcher_id, research.today(), p.author_id) returning id into new_project;
-  -- El autor entra al equipo con los permisos del plan de trabajo (el investigador se los puede quitar después).
+  -- El autor(a) entra al equipo con los permisos del plan de trabajo (el investigador(a) se los puede quitar después).
   insert into research.participants (project_id, user_id, project_role, can_manage)
-    select new_project, x, case when x = p.responsible_researcher_id then 'Investigador responsable' else 'Autor de la propuesta' end,
+    select new_project, x, case when x = p.responsible_researcher_id then 'Investigador(a) responsable' else 'Autor(a) de la propuesta' end,
            case when x = p.author_id and x <> p.responsible_researcher_id then 1 else 0 end
     from (select distinct unnest(array[p.responsible_researcher_id, p.author_id]) as x) s
     on conflict (project_id, user_id) do nothing;
@@ -1184,7 +1189,7 @@ begin
   perform research.active_role(uid, 'researcher');
   update research.proposals set responsible_researcher_id = uid, updated_at = now() where id = p.id;
   perform research.proposal_history_add(p.id, actor, 'researcher_changed', p.status, p.status,
-    'Investigador responsable: ' || (select name from research.users where id = p.responsible_researcher_id) || ' → '
+    'Investigador(a) responsable: ' || (select name from research.users where id = p.responsible_researcher_id) || ' → '
     || (select name from research.users where id = uid) || coalesce('. Motivo: ' || nullif(why, ''), ''));
 end $$;
 
@@ -1217,7 +1222,7 @@ begin
   if act = 'create' then
     researcher := case when u.role = 'student' then research.req_id(d, 'responsible_researcher_id') else u.id end;
     perform research.active_role(researcher, 'researcher');
-    -- Estudiante → su investigador; investigador → Coordinación; Coordinación → proyecto directo (con justificación).
+    -- Estudiante → su investigador(a); investigador(a) → Coordinación; Coordinación → proyecto directo (con justificación).
     v_status := case u.role when 'student' then 'pending_researcher_review' when 'researcher' then 'pending_coordinator' else 'approved' end;
     insert into research.proposals (title, description, objectives, author_id, responsible_researcher_id, status, justification)
       values (research.req_text(d, 'title', 250), research.req_text(d, 'description', 65535),
@@ -1227,8 +1232,8 @@ begin
     pid := p.id;
     perform research.proposal_file_save(pid, u.id, d);
     perform research.proposal_history_add(pid, u.id, 'created', null, v_status, case u.role
-      when 'student' then 'Enviada al investigador responsable.'
-      when 'researcher' then 'Propuesta propia del investigador: pasa directo a Coordinación.'
+      when 'student' then 'Enviada al investigador(a) responsable.'
+      when 'researcher' then 'Propuesta propia del investigador(a): pasa directo a Coordinación.'
       else 'Propuesta de Coordinación: se aprueba directamente como proyecto.' end);
     if v_status = 'approved' then new_project := research.proposal_to_project(p, u.id); end if;
     return research.ok(jsonb_build_object('proposal_id', pid, 'status', v_status, 'project_id', new_project), 201);
@@ -1247,26 +1252,26 @@ begin
       from research.documents dd join research.document_versions v on v.document_id = dd.id
       where dd.proposal_id = pid and dd.deleted_at is null order by v.id desc limit 1));
   elsif act = 'change-researcher' then
-    -- En etapa de propuesta el estudiante autor cambia de investigador él mismo (sin pasar por Coordinación).
+    -- En etapa de propuesta el estudiante autor(a) cambia de investigador(a) él mismo (sin pasar por Coordinación).
     if not (u.role = 'coordinator' or (p.author_id = u.id and u.role = 'student')) then
-      perform research.fail(403, 'Solo el autor de la propuesta o Coordinación pueden cambiar al investigador.');
+      perform research.fail(403, 'Solo el autor(a) de la propuesta o Coordinación pueden cambiar al investigador(a).');
     end if;
     if u.role = 'student' and before_s not in ('pending_researcher_review', 'changes_requested') then
-      perform research.fail(409, 'Ya no se puede cambiar al investigador en esta etapa.');
+      perform research.fail(409, 'Ya no se puede cambiar al investigador(a) en esta etapa.');
     end if;
     researcher := research.req_id(d, 'researcher_id');
     perform research.proposal_set_researcher(p, researcher, u.id, research.opt_text(d, 'reason', 2000));
     update research.researcher_change_requests set status = 'closed', reviewed_at = now(),
-      review_note = 'Se cerró: el investigador responsable ya se cambió desde la propuesta.' where proposal_id = pid and status = 'pending';
+      review_note = 'Se cerró: el investigador(a) responsable ya se cambió desde la propuesta.' where proposal_id = pid and status = 'pending';
     return research.ok(jsonb_build_object('proposal_id', pid, 'status', before_s));
   elsif act = 'history' then
     return research.ok(jsonb_build_object('items', (
       select coalesce(jsonb_agg(to_jsonb(h) || jsonb_build_object('actor_name', x.name, 'actor_role', x.role) order by h.id desc), '[]')
       from research.proposal_history h left join research.users x on x.id = h.actor_id where h.proposal_id = pid)));
   elsif act = 'delete' then
-    -- El autor elimina su propuesta mientras no sea proyecto; Coordinación puede eliminar cualquiera (con su proyecto).
+    -- El autor(a) elimina su propuesta mientras no sea proyecto; Coordinación puede eliminar cualquiera (con su proyecto).
     if u.role <> 'coordinator' then
-      if p.author_id <> u.id then perform research.fail(403, 'Solo el autor o Coordinación pueden eliminar la propuesta.'); end if;
+      if p.author_id <> u.id then perform research.fail(403, 'Solo el autor(a) o Coordinación pueden eliminar la propuesta.'); end if;
       if exists (select 1 from research.projects where proposal_id = pid) then
         perform research.fail(409, 'Esta propuesta ya es un proyecto; solo Coordinación puede eliminarlo por completo. Si ya no se hará, cancélala.');
       end if;
@@ -1277,7 +1282,7 @@ begin
 
   elsif act = 'update' then
     -- Corregir y reenviar en un solo paso.
-    if p.author_id <> u.id then perform research.fail(403, 'Solo el autor puede corregir la propuesta.'); end if;
+    if p.author_id <> u.id then perform research.fail(403, 'Solo el autor(a) puede corregir la propuesta.'); end if;
     if before_s not in ('changes_requested', 'pending_researcher_review', 'pending_coordinator') then
       perform research.fail(409, 'La propuesta ya fue revisada; ya no se puede editar.');
     end if;
@@ -1289,33 +1294,33 @@ begin
     after_s := case when before_s = 'changes_requested'
                     then coalesce(p.returns_to, case when u.role = 'student' then 'pending_researcher_review' else 'pending_coordinator' end)
                     else before_s end;
-    -- Si el estudiante eligió mal al investigador, lo corrige aquí; el nuevo investigador la revisa desde el inicio.
+    -- Si el estudiante eligió mal al investigador(a), lo corrige aquí; el nuevo investigador(a) la revisa desde el inicio.
     if u.role = 'student' and research.has(d, 'responsible_researcher_id') then
       researcher := research.req_id(d, 'responsible_researcher_id');
       if researcher <> p.responsible_researcher_id then
         perform research.active_role(researcher, 'researcher');
         after_s := 'pending_researcher_review';
         update research.proposals set responsible_researcher_id = researcher where id = pid;
-        obs := 'Nuevo investigador responsable: ' || (select name from research.users where id = researcher) || '. ';
+        obs := 'Nuevo investigador(a) responsable: ' || (select name from research.users where id = researcher) || '. ';
       end if;
     end if;
     update research.proposals set returns_to = null where id = pid;
     if before_s = 'changes_requested' then
-      obs := coalesce(obs, '') || case when after_s = 'pending_coordinator' then 'Corregida y reenviada a Coordinación.' else 'Corregida y reenviada al investigador responsable.' end;
+      obs := coalesce(obs, '') || case when after_s = 'pending_coordinator' then 'Corregida y reenviada a Coordinación.' else 'Corregida y reenviada al investigador(a) responsable.' end;
       log_action := 'resubmit';
     elsif obs is not null then
       obs := obs || 'Editada antes de ser revisada.';
       log_action := 'researcher_changed';
     else
-      obs := 'El autor la editó antes de que la revisaran.';
+      obs := 'El autor(a) la editó antes de que la revisaran.';
       log_action := 'edited';
     end if;
 
   elsif act = 'review' then
-    -- Revisa quien tiene la propuesta en su bandeja: el investigador responsable o Coordinación.
+    -- Revisa quien tiene la propuesta en su bandeja: el investigador(a) responsable o Coordinación.
     if before_s = 'pending_researcher_review' then
       if u.role not in ('researcher', 'coordinator') or p.responsible_researcher_id <> u.id then
-        perform research.fail(403, 'Esta propuesta la revisa el investigador responsable.');
+        perform research.fail(403, 'Esta propuesta la revisa el investigador(a) responsable.');
       end if;
     elsif before_s = 'pending_coordinator' then
       if u.role <> 'coordinator' then perform research.fail(403, 'Esta propuesta la revisa Coordinación.'); end if;
@@ -1327,8 +1332,8 @@ begin
     obs := case when decision = 'approved' then research.opt_text(d, 'observations', 65535)
                 else research.req_text(d, 'observations', 65535) end;
     after_s := case decision
-      -- La aprobación del investigador es la final para propuestas de estudiantes;
-      -- las propuestas propias de un investigador las aprueba Coordinación.
+      -- La aprobación del investigador(a) es la final para propuestas de estudiantes;
+      -- las propuestas propias de un investigador(a) las aprueba Coordinación.
       when 'approved' then 'approved'
       when 'changes_requested' then 'changes_requested' else 'rejected' end;
     if decision = 'changes_requested' then update research.proposals set returns_to = before_s where id = pid; end if;
@@ -1337,7 +1342,7 @@ begin
 
   elsif act = 'cancel' then
     -- Error humano típico: se envió una propuesta por equivocación o ya no se hará.
-    if not (p.author_id = u.id or u.role = 'coordinator') then perform research.fail(403, 'Solo el autor o Coordinación pueden cancelar la propuesta.'); end if;
+    if not (p.author_id = u.id or u.role = 'coordinator') then perform research.fail(403, 'Solo el autor(a) o Coordinación pueden cancelar la propuesta.'); end if;
     if before_s in ('rejected', 'cancelled') then
       perform research.fail(409, case before_s when 'cancelled' then 'La propuesta ya está cancelada.' else 'La propuesta ya fue rechazada.' end);
     end if;
@@ -1362,7 +1367,7 @@ begin
 
   elsif act = 'reactivate' then
     -- Deshace una cancelación hecha por error: vuelve exactamente a donde estaba.
-    if not (p.author_id = u.id or u.role = 'coordinator') then perform research.fail(403, 'Solo el autor o Coordinación pueden reactivar la propuesta.'); end if;
+    if not (p.author_id = u.id or u.role = 'coordinator') then perform research.fail(403, 'Solo el autor(a) o Coordinación pueden reactivar la propuesta.'); end if;
     if before_s <> 'cancelled' then perform research.fail(409, 'La propuesta no está cancelada.'); end if;
     after_s := coalesce(p.status_before_cancel, case when (select role from research.users where id = p.author_id) = 'student'
                                                        then 'pending_researcher_review' else 'pending_coordinator' end);
@@ -1371,7 +1376,7 @@ begin
       select * into pj from research.projects where proposal_id = pid for update;
       if pj.id is not null and pj.status = 'cancelled' then
         if not exists (select 1 from research.users where id = pj.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
-          perform research.fail(409, 'El investigador responsable del proyecto ya no está activo. Pide a Coordinación que lo cambie antes de reactivar.');
+          perform research.fail(409, 'El investigador(a) responsable del proyecto ya no está activo. Pide a Coordinación que lo cambie antes de reactivar.');
         end if;
         update research.projects set status = 'active', status_note = null, finished_on = null, updated_at = now() where id = pj.id;
         perform research.event_project(pj.id, u.id, 'project', pj.id, 'reopened', jsonb_build_object('before', 'cancelled', 'reason', 'Se reactivó la propuesta.'));
@@ -1501,7 +1506,7 @@ set search_path = research, extensions, pg_temp as $$
   join research.users x on x.id = h.actor_id;
 $$;
 
--- Cambia al investigador responsable; el anterior sigue en el equipo como investigador.
+-- Cambia al investigador(a) responsable; el anterior sigue en el equipo como investigador(a).
 create or replace function research.project_set_researcher(p research.projects, uid integer, actor integer, why text default '')
 returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
@@ -1510,10 +1515,10 @@ begin
   if uid = p.responsible_researcher_id then perform research.fail(422, 'Esa persona ya es la responsable.'); end if;
   perform research.active_role(uid, 'researcher');
   update research.projects set responsible_researcher_id = uid, updated_at = now() where id = p.id;
-  update research.participants set project_role = 'Investigador'
-    where project_id = p.id and user_id = p.responsible_researcher_id and project_role = 'Investigador responsable';
-  insert into research.participants (project_id, user_id, project_role) values (p.id, uid, 'Investigador responsable')
-    on conflict (project_id, user_id) do update set is_active = 1, removed_at = null, project_role = 'Investigador responsable';
+  update research.participants set project_role = 'Investigador(a)'
+    where project_id = p.id and user_id = p.responsible_researcher_id and project_role = 'Investigador(a) responsable';
+  insert into research.participants (project_id, user_id, project_role) values (p.id, uid, 'Investigador(a) responsable')
+    on conflict (project_id, user_id) do update set is_active = 1, removed_at = null, project_role = 'Investigador(a) responsable';
   perform research.event_project(p.id, actor, 'project', p.id, 'change-researcher', jsonb_build_object(
     'before', (select name from research.users where id = p.responsible_researcher_id),
     'after', (select name from research.users where id = uid), 'reason', nullif(why, '')));
@@ -1637,6 +1642,7 @@ begin
       'i_can_manage', research.can_manage(p, u),
       'creator_name', (select name from research.users where id = p.creator_id),
       'is_creator', p.creator_id = u.id,
+      'creator_is_author', p.creator_id = (select author_id from research.proposals where id = p.proposal_id),
       'change_request', (select research.change_request_json(c) from research.researcher_change_requests c
                          where c.project_id = pid and c.status = 'pending' order by c.id desc limit 1),
       'last_closure', (select to_jsonb(c) || jsonb_build_object('requester_name', (select name from research.users where id = c.requested_by),
@@ -1647,13 +1653,13 @@ begin
   elsif act = 'color' then
     -- Color para distinguir el proyecto: responsable, quien gestiona el plan o Coordinación. Vacío = color automático.
     if u.role <> 'coordinator' and not research.can_manage(p, u) then
-      perform research.fail(403, 'Solo el investigador responsable o Coordinación cambian el color.');
+      perform research.fail(403, 'Solo el investigador(a) responsable o Coordinación cambian el color.');
     end if;
     if coalesce(d ->> 'color', '') <> '' and (d ->> 'color') !~ '^#[0-9A-Fa-f]{6}$' then perform research.fail(422, 'Color no válido.'); end if;
     update research.projects set color = nullif(lower(d ->> 'color'), '') where id = pid;
     return research.ok(jsonb_build_object('project_id', pid, 'color', research.project_color_by_id(pid)));
   elsif act = 'update' then
-    -- El investigador responsable configura datos y fechas.
+    -- El investigador(a) responsable configura datos y fechas.
     perform research.project_lead(p, u);
     perform research.project_active(p);
     -- El inicio no se edita: es el día en que se aprobó la propuesta. Solo se ajusta el término estimado.
@@ -1709,7 +1715,7 @@ begin
     -- Corrige un cierre o una cancelación hechos por error.
     if p.status not in ('finalized', 'cancelled') then perform research.fail(409, 'El proyecto ya está abierto.'); end if;
     if not exists (select 1 from research.users where id = p.responsible_researcher_id and role in ('researcher', 'coordinator') and status = 'active') then
-      perform research.fail(409, 'El investigador responsable ya no está activo. Reactiva su cuenta o, después de reabrir, cambia al responsable.');
+      perform research.fail(409, 'El investigador(a) responsable ya no está activo. Reactiva su cuenta o, después de reabrir, cambia al responsable.');
     end if;
     v_reason := research.req_text(d, 'reason', 2000);
     update research.projects set status = 'active', status_note = null, finished_on = null, updated_at = now() where id = pid;
@@ -1729,8 +1735,8 @@ end $$;
 -- Equipo: agregar, cambiar rol en el proyecto y retirar.
 -- Retirar no borra nada: la persona queda en el historial y se puede reincorporar.
 -- ------------------------------------------------------------------
--- Cambia a quien figura como creador(a) del proyecto (la única persona que puede pedir cambio de investigador).
--- Recibe también los permisos del plan de trabajo; el investigador responsable puede quitárselos después.
+-- Cambia a quien figura como creador(a) del proyecto (la única persona que puede pedir cambio de investigador(a)).
+-- Recibe también los permisos del plan de trabajo; el investigador(a) responsable puede quitárselos después.
 create or replace function research.project_set_creator(pid integer, new_creator integer, actor integer, why text)
 returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
@@ -1745,8 +1751,8 @@ begin
   end if;
   perform research.event_project(pid, actor, 'project', pid, 'creator_changed', jsonb_build_object(
     'before', before_name, 'after', (select name from research.users where id = new_creator), 'reason', why));
-  perform research.notify(array[new_creator], 'Ahora eres creador(a) del proyecto «' || p.title || '»',
-    coalesce(why, '') || '. Puedes gestionar el plan de trabajo y eres quien puede solicitar el cambio de investigador.',
+  perform research.notify(array[new_creator], 'Ahora eres suplente del creador(a) en «' || p.title || '»',
+    coalesce(why, '') || '. Puedes gestionar el plan de trabajo y eres quien puede solicitar el cambio de investigador(a) responsable.',
     'projects/' || pid, 'done');
 end $$;
 
@@ -1760,9 +1766,9 @@ begin
   p := research.project_access(u, pid, is_post);
   perform research.project_active(p);
   if act = 'leave' then
-    -- Cualquier integrante (menos el investigador responsable) puede salir; si es quien creó el proyecto, deja a otra persona.
+    -- Cualquier integrante (menos el investigador(a) responsable) puede salir; si es quien creó el proyecto, deja a otra persona.
     if p.responsible_researcher_id = u.id then
-      perform research.fail(409, 'Eres el investigador responsable: tu salida la aprueba Coordinación. Usa «Salir del proyecto» y propone a quién deja en tu lugar.');
+      perform research.fail(409, 'Eres el investigador(a) responsable: tu salida la aprueba Coordinación. Usa «Salir del proyecto» y propone a quién deja en tu lugar.');
     end if;
     if not exists (select 1 from research.participants where project_id = pid and user_id = u.id and is_active = 1) then
       perform research.fail(409, 'Ya no estás en el equipo.');
@@ -1785,7 +1791,7 @@ begin
         project_role = coalesce(nullif(excluded.project_role, ''), research.participants.project_role);
   elsif act = 'permissions' then
     perform research.participant_valid(pid, uid);
-    if uid = p.responsible_researcher_id then perform research.fail(409, 'El investigador responsable ya tiene todos los permisos.'); end if;
+    if uid = p.responsible_researcher_id then perform research.fail(409, 'El investigador(a) responsable ya tiene todos los permisos.'); end if;
     update research.participants set can_manage = research.req_bool(d, 'can_manage')::int where project_id = pid and user_id = uid;
     perform research.notify(array[uid],
       case when research.req_bool(d, 'can_manage') then 'Ahora puedes gestionar el plan de trabajo de «' || p.title || '»'
@@ -1795,20 +1801,22 @@ begin
     d := d || jsonb_build_object('can_manage', research.req_bool(d, 'can_manage'));
   elsif act = 'update' then
     perform research.participant_valid(pid, uid);
-    if uid = p.responsible_researcher_id then perform research.fail(409, 'El rol del investigador responsable no se cambia aquí.'); end if;
+    if uid = p.responsible_researcher_id then perform research.fail(409, 'El rol del investigador(a) responsable no se cambia aquí.'); end if;
     v_role := research.opt_text(d, 'project_role', 80);
     update research.participants set project_role = nullif(v_role, '') where project_id = pid and user_id = uid;
   elsif act in ('remove', 'leave') then
     if uid = p.responsible_researcher_id then
-      perform research.fail(409, 'No puedes retirar al investigador responsable. Coordinación puede cambiar al responsable primero.');
+      perform research.fail(409, 'No puedes retirar al investigador(a) responsable. Coordinación puede cambiar al responsable primero.');
     end if;
     if not exists (select 1 from research.participants where project_id = pid and user_id = uid and is_active = 1) then
       perform research.fail(409, 'Esa persona ya no está en el equipo.');
     end if;
-    -- Sus actividades sin terminar pasan a otra persona (por defecto, al investigador responsable).
+    -- Al retirar a alguien, sus actividades sin terminar pasan a otra persona (por defecto, al investigador(a) responsable).
+    -- Si la persona sale por su cuenta, sus actividades se quedan pendientes y se avisa al responsable y al creador(a)
+    -- para que las asignen a alguien del equipo o las cancelen.
     target := case when research.has(d, 'reassign_to') then research.req_id(d, 'reassign_to') else p.responsible_researcher_id end;
-    if target = uid then perform research.fail(422, 'Elige a otra persona para recibir sus actividades.'); end if;
-    for a in select id from research.activities where project_id = pid and participant_id = uid
+    if act = 'remove' and target = uid then perform research.fail(422, 'Elige a otra persona para recibir sus actividades.'); end if;
+    for a in select id from research.activities where project_id = pid and participant_id = uid and act = 'remove'
              and status in ('pending', 'in_review', 'changes') for update loop
       if moved = 0 then perform research.participant_valid(pid, target); end if;
       update research.activities set participant_id = target, updated_at = now() where id = a.id;
@@ -1817,9 +1825,12 @@ begin
       moved := moved + 1;
     end loop;
     if uid = p.creator_id then
+      -- Al creador(a) (o a su suplente) no lo retira el responsable: sale por su cuenta y él mismo elige a su suplente.
+      if act = 'remove' then
+        perform research.fail(409, 'Esta persona creó el proyecto (o es su suplente): solo ella puede salir, con «Salir del proyecto», y elegir a quién deja como suplente.');
+      end if;
       if not research.has(d, 'new_creator_id') then
-        perform research.fail(422, case when act = 'leave' then 'Creaste este proyecto: antes de salir elige quién queda como creador(a).'
-                                        else 'Esta persona creó el proyecto: elige quién queda como creador(a).' end);
+        perform research.fail(422, 'Creaste este proyecto: antes de salir elige a tu suplente.');
       end if;
       if research.req_id(d, 'new_creator_id') = uid then perform research.fail(422, 'Elige a otra persona del equipo como creador(a).'); end if;
       perform research.participant_valid(pid, research.req_id(d, 'new_creator_id'));
@@ -1827,12 +1838,18 @@ begin
     update research.participants set is_active = 0, removed_at = now(), can_manage = 0 where project_id = pid and user_id = uid;
     if uid = p.creator_id then
       perform research.project_set_creator(pid, research.req_id(d, 'new_creator_id'), u.id,
-        case when act = 'leave' then (select name from research.users where id = uid) || ' salió del proyecto' else 'Se retiró del equipo a quien lo creó' end);
+        (select name from research.users where id = uid) || ' salió del proyecto y te dejó como suplente');
     end if;
     if act = 'leave' then
-      perform research.notify(array_remove(array[p.responsible_researcher_id], u.id), u.name || ' salió del proyecto «' || p.title || '»',
-        case when moved > 0 then 'Sus ' || moved || ' actividad(es) sin terminar pasaron a ' || (select name from research.users where id = target) || '.' end,
-        'projects/' || pid, 'changes');
+      select count(*), string_agg('«' || left(description, 80) || '»', ', ' order by id) into moved, v_role
+        from research.activities where project_id = pid and participant_id = uid and status in ('pending', 'in_review', 'changes');
+      perform research.notify(array_remove(array_remove(array[p.responsible_researcher_id,
+          (select creator_id from research.projects where id = pid)], u.id), null),
+        u.name || ' salió del proyecto «' || p.title || '»',
+        case when moved > 0 then 'Dejó ' || moved || ' actividad(es) sin terminar: ' || v_role
+             || '. Asígnalas a alguien del equipo o cancélalas en la pestaña Actividades.' else 'No dejó actividades pendientes.' end,
+        'projects/' || pid || '?tab=Actividades', case when moved > 0 then 'changes' else 'progress' end);
+      moved := 0;
     end if;
   else
     perform research.fail(404, 'Operación no disponible.');
@@ -1849,6 +1866,19 @@ end $$;
 -- El responsable del proyecto puede reabrir una actividad aceptada por error (pedir cambios)
 -- o cancelar una actividad creada por error.
 -- ------------------------------------------------------------------
+-- Quien gestiona el plan puede reasignar o cancelar cualquier actividad. Además, quien creó el proyecto (o su suplente)
+-- puede hacerlo con las actividades que dejó alguien que salió del equipo, aunque no tenga permisos del plan.
+create or replace function research.activity_orphan_manager(p research.projects, u research.users, a research.activities)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+begin
+  if research.can_manage(p, u) then return; end if;
+  if p.creator_id = u.id and not exists (select 1 from research.participants t where t.project_id = p.id and t.user_id = a.participant_id and t.is_active = 1) then
+    return;
+  end if;
+  perform research.fail(403, 'Necesitas que el investigador(a) responsable te dé permiso para gestionar el plan de trabajo.');
+end $$;
+
 create or replace function research.activity_json(a research.activities)
 returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
@@ -1859,6 +1889,7 @@ set search_path = research, extensions, pg_temp as $$
     'deadline_status', research.deadline_status(a.status, a.deadline),
     'created_on', (a.created_at at time zone 'America/Mexico_City')::date,
     'evidence_count', (select count(*) from research.documents dd where dd.activity_id = a.id and dd.kind = 'evidence' and dd.deleted_at is null),
+    'participant_active', exists (select 1 from research.participants t where t.project_id = a.project_id and t.user_id = a.participant_id and t.is_active = 1),
     'milestones', (select coalesce(jsonb_agg(m.description), '[]') from research.milestone_activities ma
                    join research.milestones m on m.id = ma.milestone_id where ma.activity_id = a.id),
     -- Cada actividad pertenece a un hito (o a ninguno): así se muestran juntos en el plan de trabajo.
@@ -1992,7 +2023,7 @@ begin
     if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
     perform research.project_manager(p, u);
     if a.participant_id = u.id and p.responsible_researcher_id <> u.id then
-      perform research.fail(403, 'Tu propia actividad la revisa el investigador responsable u otra persona con permiso.');
+      perform research.fail(403, 'Tu propia actividad la revisa el investigador(a) responsable u otra persona con permiso.');
     end if;
     decision := research.req_text(d, 'decision', 30);
     if decision not in ('approved', 'changes_requested') then perform research.fail(422, 'Decisión inválida.'); end if;
@@ -2002,9 +2033,21 @@ begin
     next_s := case when decision = 'approved' then 'completed' else 'changes' end;
     obs := case when decision = 'changes_requested' then research.req_text(d, 'observations', 65535) else research.opt_text(d, 'observations', 65535) end;
     update research.activities set status = next_s, observations = nullif(obs, ''), updated_at = now() where id = eid;
+  elsif act = 'reassign' then
+    -- Asignar a alguien del equipo una actividad (sobre todo las que dejó quien salió del proyecto).
+    if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
+    perform research.activity_orphan_manager(p, u, a);
+    if a.status in ('completed', 'cancelled') then perform research.fail(409, 'La actividad ya está cerrada.'); end if;
+    uid := research.req_id(d, 'participant_id');
+    perform research.participant_valid(pid, uid);
+    if uid = a.participant_id then perform research.fail(422, 'Esa persona ya es la responsable de la actividad.'); end if;
+    update research.activities set participant_id = uid, updated_at = now() where id = eid;
+    perform research.notify(array_remove(array[uid], u.id), 'Te asignaron la actividad «' || left(a.description, 120) || '»',
+      'Proyecto «' || p.title || '».', 'activities/' || eid, 'progress');
+    d := d || jsonb_build_object('before', (select name from research.users where id = a.participant_id), 'after', (select name from research.users where id = uid));
   elsif act = 'cancel' then
     if a.id is null then perform research.fail(404, 'Actividad no disponible.'); end if;
-    perform research.project_manager(p, u);
+    perform research.activity_orphan_manager(p, u, a);
     if a.status in ('completed', 'cancelled') then perform research.fail(409, 'La actividad ya está cerrada.'); end if;
     obs := research.req_text(d, 'reason', 2000);
     update research.activities set status = 'cancelled', observations = obs, updated_at = now() where id = eid;
@@ -2257,7 +2300,7 @@ set search_path = research, extensions, pg_temp as $$
   left join research.users c on c.id = e.created_by;
 $$;
 
--- Proyectos a los que alguien puede ligar un evento: Coordinación, a cualquiera en curso; un investigador, a los suyos.
+-- Proyectos a los que alguien puede ligar un evento: Coordinación, a cualquiera en curso; un investigador(a), a los suyos.
 create or replace function research.event_projects(u research.users)
 returns jsonb language sql stable
 set search_path = research, extensions, pg_temp as $$
@@ -2393,7 +2436,7 @@ end $$;
 -- >>>>>>>>>> 05_documentos.sql
 -- =====================================================================
 -- URPMP · 05 · Documentos del proyecto, evidencias y fuentes institucionales (versión 3)
--- Eliminar: quien lo subió o el investigador responsable (ya no existe el "bloqueo").
+-- Eliminar: quien lo subió o el investigador(a) responsable (ya no existe el "bloqueo").
 -- Los archivos se guardan dentro de la base (máx. 5 MB) y su texto se divide
 -- en fragmentos indexados para el asistente de IA.
 -- =====================================================================
@@ -2616,7 +2659,7 @@ begin
       if coalesce(dd.created_by, 0) <> u.id then perform research.fail(403, 'Solo quien adjuntó la evidencia puede quitarla.'); end if;
       if a.status in ('completed', 'cancelled') then perform research.fail(409, 'La actividad ya está cerrada; sus evidencias se conservan.'); end if;
     elsif not institutional and coalesce(dd.created_by, 0) <> u.id and p.responsible_researcher_id <> u.id then
-      perform research.fail(403, 'Solo quien subió el documento o el investigador responsable pueden eliminarlo.');
+      perform research.fail(403, 'Solo quien subió el documento o el investigador(a) responsable pueden eliminarlo.');
     end if;
     update research.documents set deleted_at = now() where id = did;
     delete from research.document_chunks where document_id = did;
@@ -2643,7 +2686,7 @@ end $$;
 -- 3 Busca la información (RAG): documentos, descripción del proyecto,
 --   actividades, hitos y participantes · 4 Genera respuesta con citas.
 --
--- Permisos: Coordinador → cualquier proyecto. Investigador y Estudiante →
+-- Permisos: Coordinador(a) → cualquier proyecto. Investigador(a) y Estudiante →
 -- solo proyectos en los que participan.
 -- Todos → fuentes institucionales. Los filtros se aplican ANTES de leer texto.
 --
@@ -2700,7 +2743,7 @@ returns text language sql immutable as $$
     when 'pending' then 'Pendiente' when 'in_review' then 'En revisión'
     when 'completed' then 'Completada' when 'achieved' then 'Alcanzado' when 'approved' then 'Aprobada'
     when 'rejected' then 'Rechazada' when 'changes_requested' then 'Cambios solicitados'
-    when 'pending_researcher_review' then 'En revisión del investigador' when 'pending_coordinator' then 'En revisión de Coordinación'
+    when 'pending_researcher_review' then 'En revisión del investigador(a)' when 'pending_coordinator' then 'En revisión de Coordinación'
     else coalesce(s, '') end;
 $$;
 
@@ -2766,7 +2809,7 @@ begin
   end loop;
 
   -- Propuestas visibles (estado del flujo de aprobación).
-  select coalesce(string_agg(format('- Propuesta «%s» — estado: %s%s — autor: %s — investigador responsable: %s%s',
+  select coalesce(string_agg(format('- Propuesta «%s» — estado: %s%s — autor(a): %s — investigador(a) responsable: %s%s',
       x.title, research.status_label(x.status), '',
       au.name, rr.name,
       coalesce(' — última observación: ' || research.cut((select h.details from research.proposal_history h where h.proposal_id = x.id
@@ -2826,10 +2869,10 @@ begin
     where e.event_date between research.today() and research.today() + 90 and research.event_visible(u, e);
 
   -- Estudiantes: documentos ocultos a estudiantes en sus proyectos. Nunca se manda su título ni su contenido,
-  -- solo cuántos hay y si coinciden con la pregunta, para que la IA avise que el investigador los ocultó.
+  -- solo cuántos hay y si coinciden con la pregunta, para que la IA avise que el investigador(a) los ocultó.
   if u.role = 'student' and cardinality(scope) > 0 then
-    asks_docs := research.normalize_search(question) ~ '(document|archivo|reporte|informe|entrevista|version|oculto|investigador)';
-    select coalesce(string_agg(format('- Proyecto «%s»: %s documento(s) que el investigador responsable (%s) ocultó a los estudiantes (solo los ven investigadores y Coordinación)%s.',
+    asks_docs := research.normalize_search(question) ~ '(document|archivo|reporte|informe|entrevista|version|oculto|investigador(a))';
+    select coalesce(string_agg(format('- Proyecto «%s»: %s documento(s) que el investigador(a) responsable (%s) ocultó a los estudiantes (solo los ven investigadores y Coordinación)%s.',
              x.title, x.total, x.researcher, case when x.matching > 0 then format('; %s de ellos tiene información relacionada con esta pregunta', x.matching) else '' end),
              E'\n' order by x.matching desc, x.title), '')
       into hidden_text
@@ -2929,8 +2972,8 @@ begin
     end loop;
   end if;
   if coalesce(ctx ->> 'hidden_documents', '') like '%relacionada con esta pregunta%' and jsonb_array_length(ctx -> 'fragments') = 0 then
-    answer := answer || 'Parte de esa información está en documentos que el investigador responsable ocultó a los estudiantes (solo los ven los investigadores del proyecto y Coordinación), '
-      || 'por eso no te la puedo compartir. Si la necesitas, pídesela a tu investigador:' || E'\n' || (ctx ->> 'hidden_documents') || E'\n\n';
+    answer := answer || 'Parte de esa información está en documentos que el investigador(a) responsable ocultó a los estudiantes (solo los ven los investigadores del proyecto y Coordinación), '
+      || 'por eso no te la puedo compartir. Si la necesitas, pídesela a tu investigador(a):' || E'\n' || (ctx ->> 'hidden_documents') || E'\n\n';
   end if;
   if btrim(answer) = '' then
     if coalesce(ctx ->> 'structured', '') <> '' then
@@ -2990,7 +3033,7 @@ returns text language sql immutable as $$
     when 'participants/permissions' then 'POST'
     when 'activities/list' then 'GET' when 'activities/detail' then 'GET'
     when 'activities/create' then 'POST' when 'activities/update' then 'POST' when 'activities/set-milestone' then 'POST' when 'activities/submit' then 'POST'
-    when 'activities/review' then 'POST' when 'activities/cancel' then 'POST'
+    when 'activities/review' then 'POST' when 'activities/cancel' then 'POST' when 'activities/reassign' then 'POST'
     when 'milestones/list' then 'GET' when 'milestones/create' then 'POST' when 'milestones/update' then 'POST'
     when 'milestones/delete' then 'POST' when 'milestones/assign' then 'POST'
     when 'documents/list' then 'GET' when 'documents/versions' then 'GET' when 'documents/download' then 'GET'
@@ -3361,9 +3404,9 @@ begin
 end $$;
 
 -- =====================================================================
--- Solicitudes de cambio de investigador responsable
+-- Solicitudes de cambio de investigador(a) responsable
 -- El estudiante (o cualquier integrante que no sea el responsable) explica el motivo;
--- Coordinación aprueba eligiendo al nuevo investigador, o rechaza con una nota.
+-- Coordinación aprueba eligiendo al nuevo investigador(a), o rechaza con una nota.
 -- =====================================================================
 create or replace function research.change_request_json(c research.researcher_change_requests)
 returns jsonb language sql stable
@@ -3395,7 +3438,7 @@ begin
     if c.project_id is not null then
       if c.pj_status = 'cancelled' then why := 'El proyecto fue cancelado.';
       elsif c.pj_status = 'finalized' then why := 'El proyecto ya se completó.';
-      elsif c.pj_resp is distinct from c.current_researcher_id then why := 'El investigador responsable ya se cambió.';
+      elsif c.pj_resp is distinct from c.current_researcher_id then why := 'El investigador(a) responsable ya se cambió.';
       elsif not exists (select 1 from research.participants t where t.project_id = c.project_id and t.user_id = c.requested_by and t.is_active = 1) then
         why := 'Quien la pidió ya no está en el equipo.';
       end if;
@@ -3403,7 +3446,7 @@ begin
       if c.pr_status = 'cancelled' then why := 'La propuesta fue cancelada.';
       elsif c.pr_status = 'rejected' then why := 'La propuesta fue rechazada.';
       elsif c.pr_status = 'approved' then why := 'La propuesta ya se convirtió en proyecto.';
-      elsif c.pr_resp is distinct from c.current_researcher_id then why := 'El investigador responsable ya se cambió.';
+      elsif c.pr_resp is distinct from c.current_researcher_id then why := 'El investigador(a) responsable ya se cambió.';
       end if;
     end if;
     if why is not null then
@@ -3433,28 +3476,28 @@ begin
       if p.status not in ('active', 'changes', 'closing') then perform research.fail(409, 'El proyecto ya está cerrado.'); end if;
       if research.has(d, 'leave') and research.req_bool(d, 'leave') then
         -- El responsable pide salir del equipo: propone a su reemplazo y Coordinación decide (puede elegir a otro).
-        if p.responsible_researcher_id <> u.id then perform research.fail(403, 'Solo el investigador responsable pide salir de esta forma.'); end if;
+        if p.responsible_researcher_id <> u.id then perform research.fail(403, 'Solo el investigador(a) responsable pide salir de esta forma.'); end if;
       elsif p.responsible_researcher_id = u.id then
-        perform research.fail(409, 'Ya eres el investigador responsable. Si quieres dejar el proyecto, usa «Salir del proyecto».');
+        perform research.fail(409, 'Ya eres el investigador(a) responsable. Si quieres dejar el proyecto, usa «Salir del proyecto».');
       elsif p.creator_id is distinct from u.id then
-        perform research.fail(403, 'Solo quien creó el proyecto (quien registró la propuesta) puede solicitar el cambio de investigador.');
+        perform research.fail(403, 'Solo quien creó el proyecto (quien registró la propuesta) o su suplente puede solicitar el cambio de investigador(a) responsable.');
       end if;
       if exists (select 1 from research.researcher_change_requests where project_id = p.id and status = 'pending') then
         perform research.fail(409, 'Ya hay una solicitud de cambio pendiente para este proyecto.');
       end if;
     else
-      -- En etapa de propuesta no hace falta Coordinación: el autor cambia al investigador desde la propuesta.
-      perform research.fail(409, 'Mientras sea propuesta, puedes cambiar al investigador tú misma desde la propuesta (botón «Cambiar investigador»).');
+      -- En etapa de propuesta no hace falta Coordinación: el autor(a) cambia al investigador(a) desde la propuesta.
+      perform research.fail(409, 'Mientras sea propuesta, puedes cambiar al investigador(a) tú misma desde la propuesta (botón «Cambiar investigador(a)»).');
     end if;
     note := research.req_text(d, 'reason', 2000);
     if length(btrim(note)) < 10 then perform research.fail(422, 'Explica el motivo con un poco más de detalle.'); end if;
     -- Quien pide el cambio elige al nuevo responsable; Coordinación solo aprueba o rechaza.
     if not research.has(d, 'proposed_researcher_id') then
-      perform research.fail(422, case when research.has(d, 'leave') and research.req_bool(d, 'leave') then 'Elige al investigador que quedaría en tu lugar.'
-                                      else 'Elige al investigador que quieres como nuevo responsable.' end);
+      perform research.fail(422, case when research.has(d, 'leave') and research.req_bool(d, 'leave') then 'Elige al investigador(a) que quedaría en tu lugar.'
+                                      else 'Elige al investigador(a) que quieres como nuevo responsable.' end);
     end if;
     rid := research.req_id(d, 'proposed_researcher_id');
-    if rid = p.responsible_researcher_id then perform research.fail(422, 'Esa persona ya es la responsable; elige a otro investigador.'); end if;
+    if rid = p.responsible_researcher_id then perform research.fail(422, 'Esa persona ya es la responsable; elige a otro investigador(a).'); end if;
     perform research.active_role(rid, 'researcher');
     insert into research.researcher_change_requests (project_id, proposal_id, requested_by, current_researcher_id, proposed_researcher_id, reason, kind)
       values (p.id, pr.id, u.id, coalesce(p.responsible_researcher_id, pr.responsible_researcher_id), rid, note,
@@ -3475,14 +3518,14 @@ begin
     if decision not in ('approved', 'rejected') then perform research.fail(422, 'Decisión inválida.'); end if;
     note := case when decision = 'rejected' then research.req_text(d, 'note', 2000) else research.opt_text(d, 'note', 2000) end;
     if decision = 'approved' then
-      -- Se usa el investigador que eligió quien pidió el cambio (solicitudes antiguas sin elegido: Coordinación lo indica).
-      -- Si el responsable pide salir, Coordinación puede dejar al propuesto o elegir a otro investigador (del equipo o de fuera).
+      -- Se usa el investigador(a) que eligió quien pidió el cambio (solicitudes antiguas sin elegido: Coordinación lo indica).
+      -- Si el responsable pide salir, Coordinación puede dejar al propuesto o elegir a otro investigador(a) (del equipo o de fuera).
       if c.kind = 'leave' then
         rid := coalesce(case when research.has(d, 'researcher_id') then research.req_id(d, 'researcher_id') end, c.proposed_researcher_id);
       else
         rid := coalesce(c.proposed_researcher_id, case when research.has(d, 'researcher_id') then research.req_id(d, 'researcher_id') end);
       end if;
-      if rid is null then perform research.fail(422, 'Elige al nuevo investigador responsable.'); end if;
+      if rid is null then perform research.fail(422, 'Elige al nuevo investigador(a) responsable.'); end if;
       if c.project_id is not null then
         select * into p from research.projects where id = c.project_id for update;
         perform research.project_set_researcher(p, rid, u.id,
@@ -3589,7 +3632,7 @@ begin
     elsif new.action = 'reopened' then
       perform research.notify(others, 'Se reabrió el proyecto «' || t || '»', det ->> 'reason', link, 'progress');
     elsif new.action = 'change-researcher' then
-      perform research.notify(others, 'Nuevo investigador responsable en «' || t || '»', (det ->> 'before') || ' → ' || (det ->> 'after'), link, 'changes');
+      perform research.notify(others, 'Nuevo investigador(a) responsable en «' || t || '»', (det ->> 'before') || ' → ' || (det ->> 'after'), link, 'changes');
     end if;
   elsif new.entity = 'document' and new.action in ('upload', 'upload-version') then
     perform research.notify(others, case when new.action = 'upload' then 'Nuevo documento en «' else 'Nueva versión de documento en «' end || t || '»',
@@ -3607,7 +3650,7 @@ begin
   link := 'proposals/' || x.id; t := x.title;
   if new.new_status = 'pending_researcher_review' and new.action in ('created', 'resubmit', 'reactivated', 'researcher_changed') then
     perform research.notify(array_remove(array[x.responsible_researcher_id], new.actor_id), 'Propuesta por revisar: «' || t || '»',
-      (select name from research.users where id = x.author_id) || ' te eligió como investigador responsable.', link, 'progress');
+      (select name from research.users where id = x.author_id) || ' te eligió como investigador(a) responsable.', link, 'progress');
   elsif new.new_status = 'pending_coordinator' and new.action in ('created', 'resubmit', 'reactivated', 'review_approved') then
     perform research.notify(array_remove(research.coordinator_ids(), new.actor_id), 'Propuesta esperando decisión: «' || t || '»', null, link, 'progress');
   end if;
@@ -3623,7 +3666,7 @@ begin
     -- (Si ya era proyecto, el aviso lo manda el proyecto cancelado a todo el equipo.)
     perform research.notify(array_remove(array[x.author_id, x.responsible_researcher_id], new.actor_id), 'Se canceló la propuesta «' || t || '»', new.details, link, 'cancelled');
   elsif new.action = 'researcher_changed' then
-    perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Cambió el investigador responsable de «' || t || '»', new.details, link, 'changes');
+    perform research.notify(array_remove(array[x.author_id], new.actor_id), 'Cambió el investigador(a) responsable de «' || t || '»', new.details, link, 'changes');
   end if;
   return null;
 end $$;
@@ -3636,7 +3679,7 @@ begin
   if tg_op = 'INSERT' then
     perform research.notify(research.coordinator_ids(),
       case when new.kind = 'leave' then 'El responsable quiere salir de «' || (j ->> 'target_title') || '»'
-           else 'Solicitud de cambio de investigador: «' || (j ->> 'target_title') || '»' end,
+           else 'Solicitud de cambio de investigador(a) responsable: «' || (j ->> 'target_title') || '»' end,
       (j ->> 'requester_name') || case when new.kind = 'leave' then ' propone a ' || coalesce(j ->> 'proposed_name', '—') || '. ' else ': ' end
         || left(new.reason, 200), 'dashboard', 'progress');
   elsif new.status <> old.status then
@@ -3646,9 +3689,9 @@ begin
                              when 'closed' then 'Se cerró tu solicitud para salir del proyecto'
                              else 'Rechazaron tu solicitud para salir del proyecto «' || (j ->> 'target_title') || '»' end
            else
-             case new.status when 'approved' then 'Aprobaron tu solicitud de cambio de investigador'
-                             when 'closed' then 'Se cerró tu solicitud de cambio de investigador'
-                             else 'Rechazaron tu solicitud de cambio de investigador' end end,
+             case new.status when 'approved' then 'Aprobaron tu solicitud de cambio de investigador(a)'
+                             when 'closed' then 'Se cerró tu solicitud de cambio de investigador(a)'
+                             else 'Rechazaron tu solicitud de cambio de investigador(a)' end end,
       coalesce(new.review_note, j ->> 'target_title'), j ->> 'link', case when new.status = 'approved' then 'done' else 'cancelled' end);
   end if;
   return null;
@@ -3679,7 +3722,7 @@ begin
           'activities/' || a.id, 'progress', 'due3:' || a.id || ':' || a.deadline);
       elsif a.dias = 0 then
         perform research.notify(array[u.id], '📅 Hoy es la fecha estimada: ' || left(a.description, 120),
-          'Proyecto «' || a.title || '». Si necesitas más tiempo, avisa a tu investigador para ajustar la fecha.',
+          'Proyecto «' || a.title || '». Si necesitas más tiempo, avisa a tu investigador(a) para ajustar la fecha.',
           'activities/' || a.id, 'progress', 'today:' || a.id || ':' || a.deadline);
       elsif a.dias < -3 then
         perform research.notify(array[u.id], '⚠ Actividad retrasada: ' || left(a.description, 120),

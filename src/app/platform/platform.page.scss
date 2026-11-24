@@ -588,3 +588,10 @@ main.has-pc .milestone-group.drop-here { border-color: var(--pc); box-shadow: 0 
   .cal-bar h2 { min-width: 0; font-size: 17px; } .cal-sum { margin-left: 0; width: 100%; }
 }
 
+
+/* Campos bloqueados en los diálogos (p. ej. elegir investigador cuando se rechaza). */
+select:disabled, textarea:disabled, input:disabled { opacity: .55; cursor: not-allowed; background: #eef1f0; }
+
+/* Actividades que dejó alguien que salió del proyecto */
+.orphan-box { margin-bottom: 14px; }
+.orphan-box .list-row { background: #fff; border-radius: 10px; margin-top: 8px; }

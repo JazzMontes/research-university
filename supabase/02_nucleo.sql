@@ -26,9 +26,9 @@ returns text language sql immutable as $$
     when 'start_date' then 'Fecha de inicio' when 'end_date' then 'Fecha de término'
     when 'filename' then 'Archivo' when 'question' then 'Pregunta' when 'project_role' then 'Rol en el proyecto'
     when 'reason' then 'Motivo' when 'comment' then 'Comentario' when 'email' then 'Correo' when 'justification' then 'Justificación' when 'note' then 'Nota'
-    when 'responsible_researcher_id' then 'Investigador responsable' when 'participant_id' then 'Responsable'
-    when 'user_id' then 'Persona' when 'researcher_id' then 'Nuevo investigador' when 'reassign_to' then 'Quién recibe sus actividades'
-    when 'new_creator_id' then 'Nuevo creador del proyecto' when 'event_date' then 'Fecha del evento' when 'event_time' then 'Hora' when 'location' then 'Lugar' when 'event_id' then 'Evento' when 'project_id' then 'Proyecto'
+    when 'responsible_researcher_id' then 'Investigador(a) responsable' when 'participant_id' then 'Responsable'
+    when 'user_id' then 'Persona' when 'researcher_id' then 'Nuevo investigador(a)' when 'reassign_to' then 'Quién recibe sus actividades'
+    when 'new_creator_id' then 'Nuevo creador(a) del proyecto' when 'event_date' then 'Fecha del evento' when 'event_time' then 'Hora' when 'location' then 'Lugar' when 'event_id' then 'Evento' when 'project_id' then 'Proyecto'
     else null end, field);
 $$;
 
@@ -154,8 +154,8 @@ $$;
 
 create or replace function research.role_label(r text)
 returns text language sql immutable as $$
-  select case r when 'student' then 'Estudiante' when 'researcher' then 'Investigador'
-    when 'coordinator' then 'Coordinador' else r end;
+  select case r when 'student' then 'Estudiante' when 'researcher' then 'Investigador(a)'
+    when 'coordinator' then 'Coordinador(a)' else r end;
 $$;
 
 -- ------------------------------------------------------------------
@@ -266,7 +266,7 @@ set search_path = research, extensions, pg_temp as $$
 begin
   -- Coordinación también puede ser investigadora: administra SOLO los proyectos donde es responsable.
   if u.role not in ('researcher', 'coordinator') or p.responsible_researcher_id <> u.id then
-    perform research.fail(403, 'Solo el investigador responsable administra este proyecto.');
+    perform research.fail(403, 'Solo el investigador(a) responsable administra este proyecto.');
   end if;
 end $$;
 
@@ -287,7 +287,7 @@ returns void language plpgsql
 set search_path = research, extensions, pg_temp as $$
 begin
   if not research.can_manage(p, u) then
-    perform research.fail(403, 'Necesitas que el investigador responsable te dé permiso para gestionar el plan de trabajo.');
+    perform research.fail(403, 'Necesitas que el investigador(a) responsable te dé permiso para gestionar el plan de trabajo.');
   end if;
 end $$;
 
@@ -323,7 +323,7 @@ begin
   perform 1 from research.users where id = uid and status = 'active'
     and (role = r or (r = 'researcher' and role = 'coordinator')) for update;
   if not found then
-    perform research.fail(422, case when r = 'researcher' then 'Selecciona una cuenta activa de investigador o de Coordinación.'
+    perform research.fail(422, case when r = 'researcher' then 'Selecciona una cuenta activa de investigador(a) o de Coordinación.'
                                     else 'Selecciona una cuenta activa con rol ' || lower(research.role_label(r)) || '.' end);
   end if;
 end $$;
