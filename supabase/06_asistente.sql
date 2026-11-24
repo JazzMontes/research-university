@@ -186,11 +186,11 @@ begin
     from research.calendar_events e left join research.projects p on p.id = e.project_id
     where e.event_date between research.today() and research.today() + 90 and research.event_visible(u, e);
 
-  -- Estudiantes: documentos «Solo investigadores» de sus proyectos. Nunca se manda su título ni su contenido,
+  -- Estudiantes: documentos ocultos a estudiantes en sus proyectos. Nunca se manda su título ni su contenido,
   -- solo cuántos hay y si coinciden con la pregunta, para que la IA avise que el investigador los ocultó.
   if u.role = 'student' and cardinality(scope) > 0 then
     asks_docs := research.normalize_search(question) ~ '(document|archivo|reporte|informe|entrevista|version|oculto|investigador)';
-    select coalesce(string_agg(format('- Proyecto «%s»: %s documento(s) que el investigador responsable (%s) marcó como «Solo investigadores»%s.',
+    select coalesce(string_agg(format('- Proyecto «%s»: %s documento(s) que el investigador responsable (%s) ocultó a los estudiantes (solo los ven investigadores y Coordinación)%s.',
              x.title, x.total, x.researcher, case when x.matching > 0 then format('; %s de ellos tiene información relacionada con esta pregunta', x.matching) else '' end),
              E'\n' order by x.matching desc, x.title), '')
       into hidden_text
@@ -290,7 +290,7 @@ begin
     end loop;
   end if;
   if coalesce(ctx ->> 'hidden_documents', '') like '%relacionada con esta pregunta%' and jsonb_array_length(ctx -> 'fragments') = 0 then
-    answer := answer || 'Parte de esa información está en documentos que el investigador responsable marcó como «Solo investigadores», '
+    answer := answer || 'Parte de esa información está en documentos que el investigador responsable ocultó a los estudiantes (solo los ven los investigadores del proyecto y Coordinación), '
       || 'por eso no te la puedo compartir. Si la necesitas, pídesela a tu investigador:' || E'\n' || (ctx ->> 'hidden_documents') || E'\n\n';
   end if;
   if btrim(answer) = '' then

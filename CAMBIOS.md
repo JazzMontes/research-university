@@ -1,5 +1,24 @@
 # URPMP · Versión 3 (sin evaluador)
 
+## Versión 3.18 · Creador del proyecto y documentos ocultos a estudiantes
+**Para actualizar:** corre `supabase/instalar_todo.sql`, vuelve a publicar la función **asistente** y reemplaza `src/`.
+- **«Oculto a estudiantes»** (antes «Solo investigadores»): el nombre ahora dice lo que pasa. Esos documentos los ven los
+  investigadores del proyecto y Coordinación; los estudiantes no, ni a través del asistente.
+- **Creador(a) del proyecto:** quien registró la propuesta. Aparece con la etiqueta ★ Creador(a) en Equipo.
+  - Es la **única persona que puede solicitar el cambio de investigador** (el botón ya no aparece a los demás integrantes).
+  - **Entra al equipo con permisos del plan de trabajo** (crear, editar y revisar actividades e hitos). El investigador
+    responsable se los puede quitar o devolver con «Quitar permisos / Dar permisos».
+  - **Salir del proyecto** (nuevo botón en Resumen para cualquier integrante que no sea el responsable): si quien sale es
+    el creador, debe elegir a otra persona del equipo como creador(a). Lo mismo si el responsable lo retira del equipo.
+    La nueva persona recibe aviso y los permisos del plan.
+  - Si se elimina la cuenta del creador, queda como creador(a) otra persona del equipo o, si no hay, el responsable.
+- **El investigador responsable también puede salir del equipo**, con aprobación de Coordinación: en «Salir del proyecto»
+  propone a otro investigador (del equipo o que no haya estado) y explica el motivo. Coordinación recibe el aviso y,
+  al resolver, aprueba con el investigador propuesto o elige a otro, o rechaza (el responsable sigue igual).
+  Al aprobarse: el nuevo responsable entra al equipo, recibe las actividades pendientes del anterior y, si el anterior
+  había creado el proyecto, también queda como creador(a). El anterior deja el equipo y recibe aviso.
+- Los proyectos que ya existían toman como creador(a) al autor de su propuesta; sus permisos no se cambian.
+
 ## Versión 3.17 · Eventos en el calendario
 **Para actualizar:** corre `supabase/instalar_todo.sql`, vuelve a publicar la función **asistente** y reemplaza `src/`.
 - **Nuevo evento** (botón en Calendario, solo Coordinación e investigadores): nombre, fecha, hora opcional (vacía = todo el día),

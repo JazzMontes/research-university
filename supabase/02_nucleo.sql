@@ -28,7 +28,7 @@ returns text language sql immutable as $$
     when 'reason' then 'Motivo' when 'comment' then 'Comentario' when 'email' then 'Correo' when 'justification' then 'Justificación' when 'note' then 'Nota'
     when 'responsible_researcher_id' then 'Investigador responsable' when 'participant_id' then 'Responsable'
     when 'user_id' then 'Persona' when 'researcher_id' then 'Nuevo investigador' when 'reassign_to' then 'Quién recibe sus actividades'
-    when 'event_date' then 'Fecha del evento' when 'event_time' then 'Hora' when 'location' then 'Lugar' when 'event_id' then 'Evento' when 'project_id' then 'Proyecto'
+    when 'new_creator_id' then 'Nuevo creador del proyecto' when 'event_date' then 'Fecha del evento' when 'event_time' then 'Hora' when 'location' then 'Lugar' when 'event_id' then 'Evento' when 'project_id' then 'Proyecto'
     else null end, field);
 $$;
 

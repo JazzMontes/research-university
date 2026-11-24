@@ -228,7 +228,7 @@ begin
     update research.documents set deleted_at = now() where id = did;
     delete from research.document_chunks where document_id = did;
   elsif act = 'set-restriction' and not institutional then
-    -- "Solo investigadores": los estudiantes del proyecto no lo ven.
+    -- "Oculto a estudiantes": lo ven los investigadores del proyecto y Coordinación; los estudiantes no.
     perform research.project_lead(p, u);
     did := dd.id;
     v_flag := research.req_bool(d, 'restricted');

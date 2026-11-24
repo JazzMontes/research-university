@@ -125,6 +125,12 @@ begin
   end loop;
   -- 5) Sale de los equipos y sus solicitudes pendientes se cierran solas.
   update research.participants set is_active = 0, removed_at = coalesce(removed_at, now()), can_manage = 0 where user_id = t.id and is_active = 1;
+  -- Si creó proyectos, otra persona del equipo queda como creadora (o el investigador responsable si no hay nadie más).
+  for a in select pr.* from research.projects pr where pr.creator_id = t.id loop
+    perform research.project_set_creator(a.id, coalesce(
+      (select pt.user_id from research.participants pt where pt.project_id = a.id and pt.is_active = 1 and pt.user_id <> a.responsible_researcher_id
+         order by pt.joined_at, pt.user_id limit 1), a.responsible_researcher_id), actor, 'Se eliminó la cuenta de quien lo creó');
+  end loop;
   perform research.change_requests_cleanup();
   return imp || jsonb_build_object('activities_moved', n_act);
 end $$;
@@ -307,10 +313,12 @@ begin
     perform research.fail(409, 'El investigador responsable ya no está activo. Cambia al responsable o solicita cambios al autor.');
   end if;
   -- El proyecto inicia el día en que se aprueba la propuesta.
-  insert into research.projects (proposal_id, title, description, objectives, responsible_researcher_id, start_date)
-    values (p.id, p.title, p.description, p.objectives, p.responsible_researcher_id, research.today()) returning id into new_project;
-  insert into research.participants (project_id, user_id, project_role)
-    select new_project, x, case when x = p.responsible_researcher_id then 'Investigador responsable' else 'Autor de la propuesta' end
+  insert into research.projects (proposal_id, title, description, objectives, responsible_researcher_id, start_date, creator_id)
+    values (p.id, p.title, p.description, p.objectives, p.responsible_researcher_id, research.today(), p.author_id) returning id into new_project;
+  -- El autor entra al equipo con los permisos del plan de trabajo (el investigador se los puede quitar después).
+  insert into research.participants (project_id, user_id, project_role, can_manage)
+    select new_project, x, case when x = p.responsible_researcher_id then 'Investigador responsable' else 'Autor de la propuesta' end,
+           case when x = p.author_id and x <> p.responsible_researcher_id then 1 else 0 end
     from (select distinct unnest(array[p.responsible_researcher_id, p.author_id]) as x) s
     on conflict (project_id, user_id) do nothing;
   update research.documents set project_id = new_project, kind = 'project' where proposal_id = p.id and deleted_at is null;

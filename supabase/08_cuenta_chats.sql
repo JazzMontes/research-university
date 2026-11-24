@@ -282,7 +282,14 @@ begin
         perform research.fail(404, 'Proyecto no disponible.');
       end if;
       if p.status not in ('active', 'changes', 'closing') then perform research.fail(409, 'El proyecto ya está cerrado.'); end if;
-      if p.responsible_researcher_id = u.id then perform research.fail(409, 'Ya eres el investigador responsable.'); end if;
+      if research.has(d, 'leave') and research.req_bool(d, 'leave') then
+        -- El responsable pide salir del equipo: propone a su reemplazo y Coordinación decide (puede elegir a otro).
+        if p.responsible_researcher_id <> u.id then perform research.fail(403, 'Solo el investigador responsable pide salir de esta forma.'); end if;
+      elsif p.responsible_researcher_id = u.id then
+        perform research.fail(409, 'Ya eres el investigador responsable. Si quieres dejar el proyecto, usa «Salir del proyecto».');
+      elsif p.creator_id is distinct from u.id then
+        perform research.fail(403, 'Solo quien creó el proyecto (quien registró la propuesta) puede solicitar el cambio de investigador.');
+      end if;
       if exists (select 1 from research.researcher_change_requests where project_id = p.id and status = 'pending') then
         perform research.fail(409, 'Ya hay una solicitud de cambio pendiente para este proyecto.');
       end if;
@@ -293,12 +300,16 @@ begin
     note := research.req_text(d, 'reason', 2000);
     if length(btrim(note)) < 10 then perform research.fail(422, 'Explica el motivo con un poco más de detalle.'); end if;
     -- Quien pide el cambio elige al nuevo responsable; Coordinación solo aprueba o rechaza.
-    if not research.has(d, 'proposed_researcher_id') then perform research.fail(422, 'Elige al investigador que quieres como nuevo responsable.'); end if;
+    if not research.has(d, 'proposed_researcher_id') then
+      perform research.fail(422, case when research.has(d, 'leave') and research.req_bool(d, 'leave') then 'Elige al investigador que quedaría en tu lugar.'
+                                      else 'Elige al investigador que quieres como nuevo responsable.' end);
+    end if;
     rid := research.req_id(d, 'proposed_researcher_id');
     if rid = p.responsible_researcher_id then perform research.fail(422, 'Esa persona ya es la responsable; elige a otro investigador.'); end if;
     perform research.active_role(rid, 'researcher');
-    insert into research.researcher_change_requests (project_id, proposal_id, requested_by, current_researcher_id, proposed_researcher_id, reason)
-      values (p.id, pr.id, u.id, coalesce(p.responsible_researcher_id, pr.responsible_researcher_id), rid, note)
+    insert into research.researcher_change_requests (project_id, proposal_id, requested_by, current_researcher_id, proposed_researcher_id, reason, kind)
+      values (p.id, pr.id, u.id, coalesce(p.responsible_researcher_id, pr.responsible_researcher_id), rid, note,
+              case when research.has(d, 'leave') and research.req_bool(d, 'leave') then 'leave' else 'change' end)
       returning * into c;
     return research.ok(jsonb_build_object('request', research.change_request_json(c)), 201);
   end if;
@@ -316,11 +327,29 @@ begin
     note := case when decision = 'rejected' then research.req_text(d, 'note', 2000) else research.opt_text(d, 'note', 2000) end;
     if decision = 'approved' then
       -- Se usa el investigador que eligió quien pidió el cambio (solicitudes antiguas sin elegido: Coordinación lo indica).
-      rid := coalesce(c.proposed_researcher_id, case when research.has(d, 'researcher_id') then research.req_id(d, 'researcher_id') end);
+      -- Si el responsable pide salir, Coordinación puede dejar al propuesto o elegir a otro investigador (del equipo o de fuera).
+      if c.kind = 'leave' then
+        rid := coalesce(case when research.has(d, 'researcher_id') then research.req_id(d, 'researcher_id') end, c.proposed_researcher_id);
+      else
+        rid := coalesce(c.proposed_researcher_id, case when research.has(d, 'researcher_id') then research.req_id(d, 'researcher_id') end);
+      end if;
       if rid is null then perform research.fail(422, 'Elige al nuevo investigador responsable.'); end if;
       if c.project_id is not null then
         select * into p from research.projects where id = c.project_id for update;
-        perform research.project_set_researcher(p, rid, u.id, 'Solicitud de ' || (select name from research.users where id = c.requested_by) || ': ' || c.reason);
+        perform research.project_set_researcher(p, rid, u.id,
+          case when c.kind = 'leave' then (select name from research.users where id = c.requested_by) || ' salió del proyecto: ' || c.reason
+               else 'Solicitud de ' || (select name from research.users where id = c.requested_by) || ': ' || c.reason end);
+        if c.kind = 'leave' then
+          -- Sale del equipo: sus actividades sin terminar pasan al nuevo responsable; si había creado el proyecto, también eso.
+          update research.activities set participant_id = rid, updated_at = now()
+            where project_id = p.id and participant_id = c.requested_by and status in ('pending', 'in_review', 'changes');
+          update research.participants set is_active = 0, removed_at = now(), can_manage = 0 where project_id = p.id and user_id = c.requested_by;
+          if p.creator_id = c.requested_by then
+            perform research.project_set_creator(p.id, rid, u.id, 'Quien creó el proyecto salió del equipo');
+          end if;
+          perform research.event_project(p.id, u.id, 'participant', c.requested_by, 'leave', jsonb_build_object(
+            'user', (select name from research.users where id = c.requested_by), 'reason', c.reason));
+        end if;
       else
         select * into pr from research.proposals where id = c.proposal_id for update;
         perform research.proposal_set_researcher(pr, rid, u.id, c.reason);
@@ -456,13 +485,21 @@ set search_path = research, extensions, pg_temp as $$
 declare j jsonb := research.change_request_json(new);
 begin
   if tg_op = 'INSERT' then
-    perform research.notify(research.coordinator_ids(), 'Solicitud de cambio de investigador: «' || (j ->> 'target_title') || '»',
-      (j ->> 'requester_name') || ': ' || left(new.reason, 200), 'dashboard', 'progress');
+    perform research.notify(research.coordinator_ids(),
+      case when new.kind = 'leave' then 'El responsable quiere salir de «' || (j ->> 'target_title') || '»'
+           else 'Solicitud de cambio de investigador: «' || (j ->> 'target_title') || '»' end,
+      (j ->> 'requester_name') || case when new.kind = 'leave' then ' propone a ' || coalesce(j ->> 'proposed_name', '—') || '. ' else ': ' end
+        || left(new.reason, 200), 'dashboard', 'progress');
   elsif new.status <> old.status then
     perform research.notify(array[new.requested_by],
-      case new.status when 'approved' then 'Aprobaron tu solicitud de cambio de investigador'
-                      when 'closed' then 'Se cerró tu solicitud de cambio de investigador'
-                      else 'Rechazaron tu solicitud de cambio de investigador' end,
+      case when new.kind = 'leave' then
+             case new.status when 'approved' then 'Aprobaron tu salida del proyecto «' || (j ->> 'target_title') || '»'
+                             when 'closed' then 'Se cerró tu solicitud para salir del proyecto'
+                             else 'Rechazaron tu solicitud para salir del proyecto «' || (j ->> 'target_title') || '»' end
+           else
+             case new.status when 'approved' then 'Aprobaron tu solicitud de cambio de investigador'
+                             when 'closed' then 'Se cerró tu solicitud de cambio de investigador'
+                             else 'Rechazaron tu solicitud de cambio de investigador' end end,
       coalesce(new.review_note, j ->> 'target_title'), j ->> 'link', case when new.status = 'approved' then 'done' else 'cancelled' end);
   end if;
   return null;

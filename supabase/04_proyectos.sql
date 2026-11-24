@@ -148,14 +148,15 @@ begin
     return research.ok(jsonb_build_object('item', research.project_json(p) || jsonb_build_object(
       'participants', (select coalesce(jsonb_agg(jsonb_build_object('user_id', t.user_id, 'name', x.name, 'role', x.role,
                          'project_role', t.project_role, 'is_active', t.is_active, 'joined_at', t.joined_at, 'removed_at', t.removed_at,
-                         'can_manage', t.can_manage,
+                         'can_manage', t.can_manage, 'is_creator', t.user_id = p.creator_id,
                          'pending_activities', (select count(*) from research.activities a where a.project_id = pid
                                                 and a.participant_id = t.user_id and a.status in ('pending', 'in_review', 'changes')))
                          order by t.is_active desc, x.name), '[]')
                        from research.participants t join research.users x on x.id = t.user_id where t.project_id = pid),
       'i_can_manage', research.can_manage(p, u),
-      'change_request', (select to_jsonb(c) || jsonb_build_object('requester_name', x.name)
-                         from research.researcher_change_requests c join research.users x on x.id = c.requested_by
+      'creator_name', (select name from research.users where id = p.creator_id),
+      'is_creator', p.creator_id = u.id,
+      'change_request', (select research.change_request_json(c) from research.researcher_change_requests c
                          where c.project_id = pid and c.status = 'pending' order by c.id desc limit 1),
       'last_closure', (select to_jsonb(c) || jsonb_build_object('requester_name', (select name from research.users where id = c.requested_by),
                                                                 'reviewer_name', (select name from research.users where id = c.reviewed_by))
@@ -247,6 +248,27 @@ end $$;
 -- Equipo: agregar, cambiar rol en el proyecto y retirar.
 -- Retirar no borra nada: la persona queda en el historial y se puede reincorporar.
 -- ------------------------------------------------------------------
+-- Cambia a quien figura como creador(a) del proyecto (la única persona que puede pedir cambio de investigador).
+-- Recibe también los permisos del plan de trabajo; el investigador responsable puede quitárselos después.
+create or replace function research.project_set_creator(pid integer, new_creator integer, actor integer, why text)
+returns void language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare p research.projects; before_name text;
+begin
+  select * into p from research.projects where id = pid;
+  if p.creator_id is not distinct from new_creator then return; end if;
+  before_name := (select name from research.users where id = p.creator_id);
+  update research.projects set creator_id = new_creator, updated_at = now() where id = pid;
+  if new_creator <> p.responsible_researcher_id then
+    update research.participants set can_manage = 1 where project_id = pid and user_id = new_creator and is_active = 1;
+  end if;
+  perform research.event_project(pid, actor, 'project', pid, 'creator_changed', jsonb_build_object(
+    'before', before_name, 'after', (select name from research.users where id = new_creator), 'reason', why));
+  perform research.notify(array[new_creator], 'Ahora eres creador(a) del proyecto «' || p.title || '»',
+    coalesce(why, '') || '. Puedes gestionar el plan de trabajo y eres quien puede solicitar el cambio de investigador.',
+    'projects/' || pid, 'done');
+end $$;
+
 create or replace function research.ep_participants(u research.users, act text, d jsonb, is_post boolean)
 returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
@@ -256,8 +278,19 @@ begin
   pid := research.req_id(d, 'project_id');
   p := research.project_access(u, pid, is_post);
   perform research.project_active(p);
-  perform research.project_lead(p, u);
-  uid := research.req_id(d, 'user_id');
+  if act = 'leave' then
+    -- Cualquier integrante (menos el investigador responsable) puede salir; si es quien creó el proyecto, deja a otra persona.
+    if p.responsible_researcher_id = u.id then
+      perform research.fail(409, 'Eres el investigador responsable: tu salida la aprueba Coordinación. Usa «Salir del proyecto» y propone a quién deja en tu lugar.');
+    end if;
+    if not exists (select 1 from research.participants where project_id = pid and user_id = u.id and is_active = 1) then
+      perform research.fail(409, 'Ya no estás en el equipo.');
+    end if;
+    uid := u.id;
+  else
+    perform research.project_lead(p, u);
+    uid := research.req_id(d, 'user_id');
+  end if;
 
   if act = 'add' then
     v_role := research.opt_text(d, 'project_role', 80);
@@ -284,7 +317,7 @@ begin
     if uid = p.responsible_researcher_id then perform research.fail(409, 'El rol del investigador responsable no se cambia aquí.'); end if;
     v_role := research.opt_text(d, 'project_role', 80);
     update research.participants set project_role = nullif(v_role, '') where project_id = pid and user_id = uid;
-  elsif act = 'remove' then
+  elsif act in ('remove', 'leave') then
     if uid = p.responsible_researcher_id then
       perform research.fail(409, 'No puedes retirar al investigador responsable. Coordinación puede cambiar al responsable primero.');
     end if;
@@ -302,7 +335,24 @@ begin
         'before', (select name from research.users where id = uid), 'after', (select name from research.users where id = target)));
       moved := moved + 1;
     end loop;
+    if uid = p.creator_id then
+      if not research.has(d, 'new_creator_id') then
+        perform research.fail(422, case when act = 'leave' then 'Creaste este proyecto: antes de salir elige quién queda como creador(a).'
+                                        else 'Esta persona creó el proyecto: elige quién queda como creador(a).' end);
+      end if;
+      if research.req_id(d, 'new_creator_id') = uid then perform research.fail(422, 'Elige a otra persona del equipo como creador(a).'); end if;
+      perform research.participant_valid(pid, research.req_id(d, 'new_creator_id'));
+    end if;
     update research.participants set is_active = 0, removed_at = now(), can_manage = 0 where project_id = pid and user_id = uid;
+    if uid = p.creator_id then
+      perform research.project_set_creator(pid, research.req_id(d, 'new_creator_id'), u.id,
+        case when act = 'leave' then (select name from research.users where id = uid) || ' salió del proyecto' else 'Se retiró del equipo a quien lo creó' end);
+    end if;
+    if act = 'leave' then
+      perform research.notify(array_remove(array[p.responsible_researcher_id], u.id), u.name || ' salió del proyecto «' || p.title || '»',
+        case when moved > 0 then 'Sus ' || moved || ' actividad(es) sin terminar pasaron a ' || (select name from research.users where id = target) || '.' end,
+        'projects/' || pid, 'changes');
+    end if;
   else
     perform research.fail(404, 'Operación no disponible.');
   end if;

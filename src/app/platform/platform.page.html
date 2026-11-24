@@ -446,7 +446,7 @@
           }
 
           @if (project['change_request']) {
-            <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>Solicitud de cambio de investigador pendiente</strong>
+            <div class="callout tone-changes"><strong><app-icon name="swap"></app-icon>{{ project['change_request'].kind === 'leave' ? 'El responsable pidió salir del proyecto' : 'Solicitud de cambio de investigador pendiente' }}</strong>
               <p [innerHTML]="fmt(changeRequestText(project['change_request']))"></p><p>Motivo: {{ project['change_request'].reason }}</p>
               @if (role === 'coordinator') { <button type="button" class="secondary small" (click)="reviewChangeRequest(project['change_request'])"><app-icon name="review"></app-icon>Resolver solicitud</button> }
               @else { <small>Coordinación la revisará pronto.</small> }</div>
@@ -487,6 +487,7 @@
                 @if (role === 'coordinator' && project['status'] === 'closing') { <button type="button" class="primary" (click)="reviewClosure()"><app-icon name="review"></app-icon>Revisar cierre</button> }
                 @if (isLead || role === 'coordinator') { <button type="button" class="secondary" (click)="downloadReport()"><app-icon name="printer"></app-icon>Reporte del proyecto</button> }
                 @if (canRequestProjectChange) { <button type="button" class="secondary" (click)="requestResearcherChange()"><app-icon name="swap"></app-icon>Solicitar cambio de investigador</button> }
+                @if (canLeaveProject) { <button type="button" class="danger-text" (click)="leaveProject()"><app-icon name="user-minus"></app-icon>Salir del proyecto</button> }
                 @if (role === 'coordinator' && ['active','changes','closing'].includes(project['status'])) {
                   <button type="button" class="secondary" (click)="changeResearcher()"><app-icon name="swap"></app-icon>Cambiar responsable</button>
                   <button type="button" class="danger-text" (click)="cancelProject()"><app-icon name="ban"></app-icon>Cancelar proyecto</button>
@@ -514,6 +515,7 @@
                 <div class="list-row">
                   <div><strong>{{ m.name }}</strong><small>{{ m.project_role || roleName(m.role) }} · desde {{ date(m.joined_at) }}
                     @if (+m.pending_activities) { · {{ m.pending_activities }} actividad(es) abierta(s) }</small></div>
+                  @if (+m.is_creator) { <span class="badge tone-progress" title="Registró la propuesta; es quien puede solicitar el cambio de investigador"><app-icon name="star" [size]="13"></app-icon> Creador(a)</span> }
                   @if (+m.can_manage && !isProjectLead(m)) { <span class="badge tone-done" title="Puede crear y revisar actividades e hitos"><app-icon name="key" [size]="13"></app-icon> Gestiona el plan</span> }
                   @if (isLead && projectEditable && !isProjectLead(m)) {
                     <div class="row-actions"><button type="button" class="text-button" (click)="toggleManage(m)"><app-icon name="key"></app-icon>{{ +m.can_manage ? 'Quitar permisos' : 'Dar permisos' }}</button>
@@ -616,7 +618,7 @@
               @for (d of visibleDocuments; track d.id) {
                 <div class="file-row">
                   <button type="button" class="thumb-btn" (click)="view('documents', d.id, d.version, d.title, d.filename)" title="Ver archivo"><app-file-thumb module="documents" [id]="+d.id" [version]="+d.version" [name]="d.filename"></app-file-thumb></button>
-                  <div class="file-main"><strong>{{ d.title }}</strong> @if (+d.restricted) { <span class="badge tone-neutral">Solo investigadores</span> }
+                  <div class="file-main"><strong>{{ d.title }}</strong> @if (+d.restricted) { <span class="badge tone-neutral" title="Lo ven los investigadores del proyecto y Coordinación">Oculto a estudiantes</span> }
                     <small>v{{ d.version }} · {{ d.filename }} · {{ d.uploaded_by_name }} · {{ date(d.updated_at) }}</small></div>
                   <div class="row-actions">
                     <button type="button" class="text-button view-btn" (click)="view('documents', d.id, d.version, d.title, d.filename)"><app-icon name="eye"></app-icon>Ver</button>

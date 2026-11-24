@@ -393,3 +393,19 @@ create table if not exists research.calendar_events (
 );
 create index if not exists calendar_events_date_idx on research.calendar_events (event_date);
 alter table research.calendar_events enable row level security;
+
+-- =====================================================================
+-- Creador del proyecto: quien registró la propuesta. Solo esa persona pide el cambio de investigador;
+-- si sale del equipo, deja a otra persona como creadora.
+-- =====================================================================
+alter table research.projects add column if not exists creator_id integer references research.users(id) on delete set null;
+update research.projects pr set creator_id = p.author_id
+  from research.proposals p where p.id = pr.proposal_id and pr.creator_id is null;
+
+-- Tipo de solicitud: 'change' (el creador pide otro responsable) o 'leave' (el responsable pide salir y propone reemplazo).
+alter table research.researcher_change_requests add column if not exists kind varchar(10) not null default 'change';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'rcr_kind_check') then
+    alter table research.researcher_change_requests add constraint rcr_kind_check check (kind in ('change', 'leave'));
+  end if;
+end $$;
