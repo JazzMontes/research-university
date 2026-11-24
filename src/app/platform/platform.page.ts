@@ -30,7 +30,7 @@ import { AppNotification, NotificationsService } from '../services/notifications
 type Row = any;
 interface Option { value: string; label: string; }
 
-export type FieldType = 'text' | 'textarea' | 'date' | 'email' | 'password' | 'select' | 'choice' | 'checks' | 'file';
+export type FieldType = 'text' | 'textarea' | 'date' | 'time' | 'email' | 'password' | 'select' | 'choice' | 'checks' | 'file';
 export interface DialogField {
   key: string;
   label: string;
@@ -1375,11 +1375,63 @@ export class PlatformPage implements OnInit {
     this.calHidden = next;
   }
   private calVisible(item: Row): boolean { return !this.calHidden.has(Number(item['project_id'])); }
-  get calWeeks(): { iso: string; day: number; inMonth: boolean; today: boolean; weekend: boolean; items: Row[]; milestones: Row[] }[][] {
+  /** Eventos importantes (conferencias, congresos…). Los generales siempre se ven; los de proyecto siguen el filtro de proyectos. */
+  private get calEvents(): Row[] { return (this.cal['events'] || []).filter((e: Row) => !e['project_id'] || this.calVisible(e)); }
+  get canCreateEvents(): boolean { return !!this.cal['can_create_events']; }
+  get calUpcoming(): Row[] {
+    const today = String(this.cal['today'] || this.iso(new Date()));
+    return this.calEvents.filter(e => String(e['event_date']).slice(0, 10) >= today).slice(0, 6);
+  }
+  eventWhen(e: Row): string {
+    const day = this.calLabel(String(e['event_date']).slice(0, 10));
+    return day.charAt(0).toUpperCase() + day.slice(1) + (e['event_time'] ? ` · ${e['event_time']} h` : ' · todo el día');
+  }
+  eventForm(existing?: Row, day?: string): void {
+    const today = String(this.cal['today'] || this.iso(new Date()));
+    const projects: Option[] = [{ value: '', label: 'Para todos (evento general)' },
+      ...((this.cal['event_projects'] || []) as Row[]).map(p => ({ value: String(p['id']), label: `Solo el equipo de «${p['title']}»` }))];
+    if (existing?.['project_id'] && !projects.some(o => o.value === String(existing['project_id']))) {
+      projects.push({ value: String(existing['project_id']), label: `Solo el equipo de «${existing['project_title']}»` });
+    }
+    const start = day && day >= today ? day : (this.calSelected && this.calSelected >= today ? this.calSelected : today);
+    this.openDialog({
+      title: existing ? 'Editar evento' : 'Nuevo evento', confirmLabel: existing ? 'Guardar cambios' : 'Agregar al calendario',
+      intro: existing ? 'Si cambias la fecha o la hora, se avisa a todos de nuevo.'
+        : 'Aparece en el calendario de todos y les llega aviso ahora, 3 días antes, un día antes, el mismo día y una hora antes (si tiene hora).',
+      values: existing ? { title: existing['title'], description: existing['description'], location: existing['location'],
+          event_date: String(existing['event_date']).slice(0, 10), event_time: existing['event_time'] || '', project_id: existing['project_id'] ? String(existing['project_id']) : '' }
+        : { event_date: start, event_time: '', project_id: '' },
+      fields: [
+        { key: 'title', label: 'Nombre del evento', type: 'text', required: true, placeholder: 'Ej.: Congreso Nacional de Hidrología' },
+        { key: 'event_date', label: 'Fecha', type: 'date', required: true, min: today },
+        { key: 'event_time', label: 'Hora (opcional)', type: 'time', hint: 'Déjala vacía si dura todo el día.' },
+        { key: 'location', label: 'Lugar o enlace (opcional)', type: 'text', placeholder: 'Ej.: Auditorio B o liga de Zoom' },
+        { key: 'description', label: '¿De qué se trata?', type: 'textarea', placeholder: 'Ej.: Presentamos avances del proyecto; llevar cartel impreso.' },
+        { key: 'project_id', label: '¿Para quién es?', type: 'select', options: projects },
+      ],
+      submit: async values => {
+        const body: Row = { title: values['title'], description: values['description'] || '', location: values['location'] || '',
+          event_date: values['event_date'], event_time: values['event_time'] || '', project_id: values['project_id'] || '' };
+        if (existing) body['event_id'] = existing['id'];
+        await this.post('calendar/event-save.php', body);
+        this.calSelected = String(values['event_date']);
+        return existing ? 'Evento actualizado.' : 'Evento agregado. Ya se avisó a todos.';
+      },
+    });
+  }
+  deleteEvent(e: Row): void {
+    this.openDialog({
+      title: 'Eliminar evento', confirmLabel: 'Sí, eliminar', danger: true, values: {}, fields: [],
+      warning: `Se quitará «${e['title']}» del calendario y se avisará que se canceló.`,
+      submit: async () => { await this.post('calendar/event-delete.php', { event_id: e['id'] }); return 'Evento eliminado.'; },
+    });
+  }
+  get calWeeks(): { iso: string; day: number; inMonth: boolean; today: boolean; weekend: boolean; items: Row[]; milestones: Row[]; events: Row[] }[][] {
     const start = this.calStart();
     const today = String(this.cal['today'] || this.iso(new Date()));
     const acts: Row[] = (this.cal['activities'] || []).filter((a: Row) => this.calVisible(a));
     const ms: Row[] = (this.cal['milestones'] || []).filter((m: Row) => this.calVisible(m));
+    const evs = this.calEvents;
     const weeks = [];
     for (let w = 0; w < 6; w++) {
       const row = [];
@@ -1387,15 +1439,16 @@ export class PlatformPage implements OnInit {
         const d = new Date(start); d.setDate(start.getDate() + w * 7 + k);
         const iso = this.iso(d);
         row.push({ iso, day: d.getDate(), inMonth: d.getMonth() === this.calMonth.getMonth(), today: iso === today, weekend: k >= 5,
-          items: acts.filter(a => String(a['deadline']).slice(0, 10) === iso), milestones: ms.filter(m => String(m['due_date']).slice(0, 10) === iso) });
+          items: acts.filter(a => String(a['deadline']).slice(0, 10) === iso), milestones: ms.filter(m => String(m['due_date']).slice(0, 10) === iso),
+          events: evs.filter(e => String(e['event_date']).slice(0, 10) === iso) });
       }
       weeks.push(row);
     }
     return weeks;
   }
-  get calDay(): { items: Row[]; milestones: Row[] } {
+  get calDay(): { items: Row[]; milestones: Row[]; events: Row[] } {
     const iso = this.calSelected;
-    return { items: (this.cal['activities'] || []).filter((a: Row) => this.calVisible(a) && String(a['deadline']).slice(0, 10) === iso),
+    return { events: this.calEvents.filter(e => String(e['event_date']).slice(0, 10) === iso), items: (this.cal['activities'] || []).filter((a: Row) => this.calVisible(a) && String(a['deadline']).slice(0, 10) === iso),
       milestones: (this.cal['milestones'] || []).filter((m: Row) => this.calVisible(m) && String(m['due_date']).slice(0, 10) === iso) };
   }
   get calUndated(): Row[] { return (this.cal['undated'] || []).filter((a: Row) => this.calVisible(a)); }

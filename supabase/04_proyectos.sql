@@ -683,6 +683,137 @@ begin
 end $$;
 
 -- ------------------------------------------------------------------
+-- Eventos importantes del calendario.
+-- ------------------------------------------------------------------
+create or replace function research.event_visible(u research.users, e research.calendar_events)
+returns boolean language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select e.project_id is null or research.project_visible(u, e.project_id);
+$$;
+
+-- Quiénes reciben avisos del evento: todos (sin proyecto) o el equipo del proyecto y Coordinación.
+create or replace function research.event_audience(e research.calendar_events)
+returns integer[] language plpgsql stable
+set search_path = research, extensions, pg_temp as $$
+begin
+  if e.project_id is null then
+    return (select coalesce(array_agg(id), '{}') from research.users where status = 'active' and deleted_at is null);
+  end if;
+  return research.team_ids(e.project_id) || research.coordinator_ids();
+end $$;
+
+create or replace function research.event_when(e research.calendar_events)
+returns text language sql stable as $$
+  select to_char(e.event_date, 'DD/MM/YYYY') || case when e.event_time is null then ' (todo el día)'
+         else ' a las ' || to_char(e.event_time, 'HH24:MI') end;
+$$;
+
+create or replace function research.event_starts(e research.calendar_events)
+returns timestamptz language sql stable as $$
+  select (e.event_date + coalesce(e.event_time, time '00:00')) at time zone 'America/Mexico_City';
+$$;
+
+create or replace function research.event_json(u research.users, e research.calendar_events)
+returns jsonb language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select jsonb_build_object('id', e.id, 'title', e.title, 'description', e.description, 'location', e.location,
+    'event_date', e.event_date, 'event_time', to_char(e.event_time, 'HH24:MI'),
+    'project_id', e.project_id, 'project_title', p.title, 'project_color', case when p.id is null then null else research.project_color(p) end,
+    'created_by', e.created_by, 'created_by_name', coalesce(c.name, 'Usuario eliminado'),
+    'can_edit', u.role = 'coordinator' or e.created_by = u.id)
+  from (select 1) x
+  left join research.projects p on p.id = e.project_id
+  left join research.users c on c.id = e.created_by;
+$$;
+
+-- Proyectos a los que alguien puede ligar un evento: Coordinación, a cualquiera en curso; un investigador, a los suyos.
+create or replace function research.event_projects(u research.users)
+returns jsonb language sql stable
+set search_path = research, extensions, pg_temp as $$
+  select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'color', research.project_color(p)) order by p.title), '[]')
+  from research.projects p
+  where p.status in ('active', 'changes', 'closing')
+    and (u.role = 'coordinator' or (u.role = 'researcher' and p.responsible_researcher_id = u.id));
+$$;
+
+create or replace function research.event_save(u research.users, d jsonb)
+returns jsonb language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare e research.calendar_events; old research.calendar_events; v_id integer; v_title text; v_desc text; v_loc text;
+        v_date date; v_time_txt text; v_time time; v_pid integer; aud integer[]; moved boolean;
+begin
+  if u.role not in ('coordinator', 'researcher') then
+    perform research.fail(403, 'Solo Coordinación o investigadores pueden agregar eventos al calendario.');
+  end if;
+  if research.has(d, 'event_id') then
+    v_id := research.req_id(d, 'event_id');
+    select * into old from research.calendar_events where id = v_id;
+    if not found then perform research.fail(404, 'El evento ya no existe.'); end if;
+    if u.role <> 'coordinator' and old.created_by is distinct from u.id then
+      perform research.fail(403, 'Solo quien creó el evento o Coordinación pueden cambiarlo.');
+    end if;
+  end if;
+  v_title := research.req_text(d, 'title', 160);
+  v_desc := research.opt_text(d, 'description', 2000);
+  v_loc := research.opt_text(d, 'location', 200);
+  v_date := research.req_date(d, 'event_date');
+  v_time_txt := research.opt_text(d, 'event_time', 5);
+  if v_time_txt <> '' then
+    if v_time_txt !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then perform research.fail(422, 'Escribe la hora como HH:MM (por ejemplo 16:30).'); end if;
+    v_time := v_time_txt::time;
+  end if;
+  if research.has(d, 'project_id') and coalesce(d ->> 'project_id', '') not in ('', '0') then
+    v_pid := research.req_id(d, 'project_id');
+    if not exists (select 1 from jsonb_array_elements(research.event_projects(u)) x where (x ->> 'id')::int = v_pid)
+       and v_pid is distinct from old.project_id then
+      perform research.fail(422, 'Solo puedes ligar el evento a un proyecto en curso que tú administres.');
+    end if;
+  end if;
+  moved := old.id is null or old.event_date is distinct from v_date or old.event_time is distinct from v_time;
+  if moved and (v_date < research.today() or (v_date = research.today() and v_time is not null and v_time < (now() at time zone 'America/Mexico_City')::time)) then
+    perform research.fail(422, 'La fecha y hora del evento ya pasaron.');
+  end if;
+  if old.id is null then
+    insert into research.calendar_events (title, description, location, event_date, event_time, project_id, created_by)
+    values (v_title, v_desc, v_loc, v_date, v_time, v_pid, u.id) returning * into e;
+    perform research.notify(array_remove(research.event_audience(e), u.id), '📌 Nuevo evento: ' || left(e.title, 150),
+      research.event_when(e) || case when e.location <> '' then ' · ' || e.location else '' end
+        || case when e.description <> '' then E'\n' || left(e.description, 300) else '' end
+        || E'\nLo agregó ' || u.name || '.',
+      'calendar', 'changes', 'evnew:' || e.id);
+  else
+    update research.calendar_events set title = v_title, description = v_desc, location = v_loc, event_date = v_date,
+      event_time = v_time, project_id = v_pid, updated_at = now() where id = old.id returning * into e;
+    if moved then
+      delete from research.notifications where dedupe_key ~ ('^ev(3|1|0|h):' || e.id || ':');
+      perform research.notify(array_remove(research.event_audience(e), u.id), '🔁 Cambió la fecha del evento «' || left(e.title, 140) || '»',
+        'Ahora es el ' || research.event_when(e) || case when e.location <> '' then ' · ' || e.location else '' end || '.',
+        'calendar', 'changes', 'evmove:' || e.id || ':' || e.event_date || ':' || coalesce(e.event_time::text, ''));
+    end if;
+  end if;
+  return research.ok(jsonb_build_object('event', research.event_json(u, e)));
+end $$;
+
+create or replace function research.event_delete(u research.users, d jsonb)
+returns jsonb language plpgsql
+set search_path = research, extensions, pg_temp as $$
+declare e research.calendar_events;
+begin
+  select * into e from research.calendar_events where id = research.req_id(d, 'event_id');
+  if not found then perform research.fail(404, 'El evento ya no existe.'); end if;
+  if u.role <> 'coordinator' and e.created_by is distinct from u.id then
+    perform research.fail(403, 'Solo quien creó el evento o Coordinación pueden eliminarlo.');
+  end if;
+  if research.event_starts(e) > now() - interval '1 day' then
+    perform research.notify(array_remove(research.event_audience(e), u.id), '✖ Se canceló el evento «' || left(e.title, 140) || '»',
+      'Era el ' || research.event_when(e) || '.', 'calendar', 'cancelled', 'evdel:' || e.id);
+  end if;
+  delete from research.notifications where dedupe_key ~ ('^ev(3|1|0|h):' || e.id || ':');
+  delete from research.calendar_events where id = e.id;
+  return research.ok(jsonb_build_object('deleted', e.id));
+end $$;
+
+-- ------------------------------------------------------------------
 -- Calendario: actividades y hitos con fecha en un rango, más las actividades abiertas sin fecha.
 -- scope = 'mine' (mis actividades) o 'all' (todo lo de los proyectos que puedo ver).
 -- ------------------------------------------------------------------
@@ -691,6 +822,8 @@ returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
 declare v_from date; v_to date; v_scope text := coalesce(d ->> 'scope', 'mine'); vis integer[];
 begin
+  if act = 'event-save' then return research.event_save(u, d); end if;
+  if act = 'event-delete' then return research.event_delete(u, d); end if;
   if act <> 'list' then perform research.fail(404, 'Operación no disponible.'); end if;
   v_from := coalesce(research.opt_date(d, 'from'), date_trunc('month', research.today())::date - 7);
   v_to := coalesce(research.opt_date(d, 'to'), v_from + 49);
@@ -717,6 +850,12 @@ begin
                   and p.status in ('active', 'changes', 'closing') and (v_scope = 'all' or a.participant_id = u.id)),
     'projects', (select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'color', research.project_color(p), 'status', p.status) order by p.title), '[]')
                  from research.projects p where p.id = any(vis)),
+    -- Eventos importantes: se muestran a todos los que pueden verlos, en «Mis fechas» y en «Todo».
+    'events', (select coalesce(jsonb_agg(research.event_json(u, e) order by e.event_date, e.event_time nulls first, e.id), '[]')
+               from research.calendar_events e
+               where e.event_date between v_from and v_to and research.event_visible(u, e)),
+    'can_create_events', u.role in ('coordinator', 'researcher'),
+    'event_projects', research.event_projects(u),
     'from', v_from, 'to', v_to, 'today', research.today()));
 end $$;
 

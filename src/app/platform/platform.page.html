@@ -708,11 +708,13 @@
 
         <!-- ========================= USUARIOS ========================= -->
         } @else if (section === 'calendar') {
-          <div class="heading"><div><h1>Calendario</h1><p>Tus fechas estimadas de entrega y los hitos de tus proyectos.</p></div>
+          <div class="heading"><div><h1>Calendario</h1><p>Tus fechas estimadas de entrega, los hitos de tus proyectos y los eventos importantes.</p></div>
+            <div class="heading-actions">
+            @if (canCreateEvents) { <button type="button" class="primary" (click)="eventForm()"><app-icon name="plus"></app-icon>Nuevo evento</button> }
             <div class="seg" role="group" aria-label="Qué mostrar">
               <button type="button" [class.active]="calScope === 'mine'" (click)="setCalScope('mine')">Mis actividades</button>
               <button type="button" [class.active]="calScope === 'all'" (click)="setCalScope('all')">{{ role === 'coordinator' ? 'Todos los proyectos' : 'Todo mi equipo' }}</button>
-            </div></div>
+            </div></div></div>
           <div class="cal-layout">
             <section class="panel cal-panel">
               <div class="cal-bar">
@@ -729,6 +731,10 @@
                     <div class="cal-day" role="gridcell" tabindex="0" [class.out]="!day.inMonth" [class.today]="day.today" [class.weekend]="day.weekend"
                       [class.selected]="calSelected === day.iso" (click)="calSelected = day.iso" (keydown.enter)="calSelected = day.iso">
                       <span class="cal-num">{{ day.day }}</span>
+                      @for (e of day.events; track e.id) {
+                        <button type="button" class="cal-event" [style.--pc]="e.project_color || null" (click)="$event.stopPropagation(); calSelected = day.iso"
+                          [title]="e.title + (e.event_time ? ' · ' + e.event_time + ' h' : '') + (e.location ? ' · ' + e.location : '')"><span aria-hidden="true">★ </span><span class="ev-txt">@if (e.event_time) { <b>{{ e.event_time }}</b> }{{ e.title }}</span></button>
+                      }
                       @for (m of day.milestones; track m.id) {
                         <a class="ms" [style.--pc]="m.project_color" [routerLink]="['/app/projects', m.project_id]" [queryParams]="{ tab: 'Actividades' }"
                           (click)="$event.stopPropagation()" [title]="'Hito: ' + m.description + ' · ' + m.project_title">◆ {{ m.description }}</a>
@@ -746,7 +752,7 @@
               </div>
               <div class="cal-legend">
                 <span><i class="lg ev"></i>Pendiente</span><span><i class="lg ev review"></i>En revisión</span><span><i class="lg ev changes"></i>Con cambios</span>
-                <span><i class="lg ev late"></i>Retrasada</span><span><i class="lg ev done"></i>Completada</span><span><b class="lg-ms">◆</b> Hito</span>
+                <span><i class="lg ev late"></i>Retrasada</span><span><i class="lg ev done"></i>Completada</span><span><b class="lg-ms">◆</b> Hito</span><span><i class="lg cal-event-lg"></i>★ Evento</span>
               </div>
             </section>
             <div class="cal-side">
@@ -763,6 +769,21 @@
               <section class="panel">
                 @if (calSelected) {
                   <h2><app-icon name="calendar"></app-icon>{{ calLabel(calSelected) }}</h2>
+                  @for (e of calDay.events; track e.id) {
+                    <article class="event-card" [style.--pc]="e.project_color || null">
+                      <header><strong>★ {{ e.title }}</strong>
+                        @if (e.can_edit) {
+                          <span class="event-actions">
+                            <button type="button" class="text-button" (click)="eventForm(e)">Editar</button>
+                            <button type="button" class="text-button danger-text" (click)="deleteEvent(e)">Eliminar</button>
+                          </span>
+                        }
+                      </header>
+                      <small><app-icon name="clock" [size]="13"></app-icon> {{ e.event_time ? e.event_time + ' h' : 'Todo el día' }}@if (e.location) { · {{ e.location }} }</small>
+                      @if (e.description) { <p>{{ e.description }}</p> }
+                      <small class="muted">{{ e.project_title ? 'Equipo de «' + e.project_title + '»' : 'Para todos' }} · Lo agregó {{ e.created_by_name }}</small>
+                    </article>
+                  }
                   @for (m of calDay.milestones; track m.id) {
                     <a class="list-row" [routerLink]="['/app/projects', m.project_id]" [queryParams]="{ tab: 'Actividades' }"><span class="pdot" [style.background]="m.project_color"></span>
                       <div><strong>◆ {{ m.description }}</strong><small>Hito · {{ m.project_title }}</small></div></a>
@@ -771,11 +792,24 @@
                     <a class="list-row" [routerLink]="['/app/activities', a.id]"><span class="pdot" [style.background]="a.project_color"></span>
                       <div><strong>{{ a.description }}</strong><small>{{ a.participant_name }} · {{ a.project_title }}</small></div>
                       <span class="badge" [class]="'badge tone-' + status('activity', a.status).tone">{{ status('activity', a.status).label }}</span></a>
-                  } @empty { @if (!calDay.milestones.length) { <p class="muted">Nada para este día.</p> } }
+                  } @empty { @if (!calDay.milestones.length && !calDay.events.length) { <p class="muted">Nada para este día.</p> } }
+                  @if (canCreateEvents && calSelected >= (cal['today'] || '')) {
+                    <button type="button" class="secondary small add-event" (click)="eventForm(undefined, calSelected)"><app-icon name="plus"></app-icon>Agregar evento este día</button>
+                  }
                 } @else {
                   <h2><app-icon name="calendar"></app-icon>Elige un día</h2><p class="muted">Toca un día para ver todo lo que tiene.</p>
                 }
               </section>
+              @if (calUpcoming.length) {
+                <section class="panel">
+                  <h2><app-icon name="flag"></app-icon>Próximos eventos</h2>
+                  @for (e of calUpcoming; track e.id) {
+                    <button type="button" class="list-row upcoming" (click)="calSelected = e.event_date.slice(0, 10)">
+                      <span class="pdot" [style.background]="e.project_color || '#c9821b'"></span>
+                      <div><strong>{{ e.title }}</strong><small>{{ eventWhen(e) }}@if (e.location) { · {{ e.location }} }</small></div></button>
+                  }
+                </section>
+              }
               @if (calUndated.length) {
                 <section class="panel">
                   <h2><app-icon name="clock"></app-icon>Sin fecha ({{ calUndated.length }})</h2>

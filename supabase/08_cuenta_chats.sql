@@ -478,7 +478,7 @@ create trigger notify_change_request after insert or update on research.research
 create or replace function research.ep_notifications(u research.users, act text, d jsonb)
 returns jsonb language plpgsql
 set search_path = research, extensions, pg_temp as $$
-declare a record;
+declare a record; ev research.calendar_events; dias integer; k text; extra text;
 begin
   if act = 'list' then
     -- Recordatorios (una vez por actividad y por fecha; si la fecha cambia, vuelven a avisar):
@@ -509,6 +509,25 @@ begin
       perform research.notify(array[u.id], '⚠ Retrasada: ' || left(a.description, 120),
         a.who || ' · proyecto «' || a.title || '» · fecha estimada ' || to_char(a.deadline, 'DD/MM/YYYY') || '. Puedes ajustar la fecha si hace falta.',
         'activities/' || a.id, 'cancelled', 'latelead:' || a.id || ':' || a.deadline);
+    end loop;
+    -- Eventos del calendario: aviso a 3 días (o 2), un día antes, el mismo día y una hora antes si tiene hora.
+    for ev in select e.* from research.calendar_events e left join research.projects pr on pr.id = e.project_id
+              where e.event_date between research.today() and research.today() + 3
+                and (pr.id is null or pr.status not in ('cancelled')) and research.event_visible(u, e) loop
+      dias := ev.event_date - research.today();
+      k := ev.id || ':' || ev.event_date || ':' || coalesce(ev.event_time::text, '');
+      extra := research.event_when(ev) || case when ev.location <> '' then ' · ' || ev.location else '' end
+               || case when ev.description <> '' then E'\n' || left(ev.description, 300) else '' end;
+      if dias between 2 and 3 then
+        perform research.notify(array[u.id], '📌 En ' || dias || ' días: ' || left(ev.title, 150), extra, 'calendar', 'changes', 'ev3:' || k);
+      elsif dias = 1 then
+        perform research.notify(array[u.id], '📌 Mañana: ' || left(ev.title, 150), extra, 'calendar', 'changes', 'ev1:' || k);
+      elsif dias = 0 and (ev.event_time is null or research.event_starts(ev) > now()) then
+        perform research.notify(array[u.id], '📌 Hoy: ' || left(ev.title, 150), extra, 'calendar', 'progress', 'ev0:' || k);
+        if ev.event_time is not null and research.event_starts(ev) - now() <= interval '1 hour' then
+          perform research.notify(array[u.id], '⏰ En menos de una hora: ' || left(ev.title, 140), extra, 'calendar', 'progress', 'evh:' || k);
+        end if;
+      end if;
     end loop;
     return research.ok(jsonb_build_object(
       'unread', (select count(*) from research.notifications where user_id = u.id and read_at is null),

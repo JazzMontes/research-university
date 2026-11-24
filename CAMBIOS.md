@@ -1,5 +1,17 @@
 # URPMP · Versión 3 (sin evaluador)
 
+## Versión 3.17 · Eventos en el calendario
+**Para actualizar:** corre `supabase/instalar_todo.sql`, vuelve a publicar la función **asistente** y reemplaza `src/`.
+- **Nuevo evento** (botón en Calendario, solo Coordinación e investigadores): nombre, fecha, hora opcional (vacía = todo el día),
+  lugar o enlace y «¿De qué se trata?». Se elige si es **para todos** o **solo para el equipo de un proyecto** (un investigador solo
+  puede ligarlo a sus propios proyectos en curso). No se puede poner en una fecha u hora que ya pasó.
+- Se ve en el calendario de todos con una estrella ★ en color ámbar (borde del color del proyecto si es de un proyecto), en el panel
+  del día con todos sus datos y en «Próximos eventos». También hay «Agregar evento este día».
+- **Avisos a todos:** al crearlo, 3 días antes, un día antes, el mismo día y una hora antes (si tiene hora). Si cambian la fecha o la
+  hora se avisa otra vez, y si lo eliminan se avisa que se canceló.
+- Solo quien lo creó o Coordinación lo editan o eliminan. Si se elimina un proyecto, se borran sus eventos.
+- El asistente conoce los eventos de los próximos 90 días (por ejemplo «¿cuándo es el congreso?»).
+
 ## Versión 3.16
 **Para actualizar:** corre `supabase/instalar_todo.sql`, vuelve a publicar la función **asistente** (nuevo `index.ts`) y reemplaza `src/`.
 - **Actividades canceladas ocultas:** en la pestaña Actividades del proyecto ya no aparecen dentro de los hitos. Al final hay un botón

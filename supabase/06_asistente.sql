@@ -177,6 +177,15 @@ begin
     end loop;
   end if;
 
+  -- Eventos importantes del calendario (próximos 90 días) que esta persona puede ver.
+  select structured || coalesce(E'EVENTOS PRÓXIMOS DEL CALENDARIO:\n' || string_agg(
+           '- ' || e.title || ': ' || research.event_when(e) || case when e.location <> '' then ' · ' || e.location else '' end
+           || case when e.project_id is null then ' (para todos)' else ' (equipo de «' || p.title || '»)' end
+           || case when e.description <> '' then ' — ' || left(e.description, 200) else '' end, E'\n' order by e.event_date, e.event_time) || E'\n\n', '')
+    into structured
+    from research.calendar_events e left join research.projects p on p.id = e.project_id
+    where e.event_date between research.today() and research.today() + 90 and research.event_visible(u, e);
+
   -- Estudiantes: documentos «Solo investigadores» de sus proyectos. Nunca se manda su título ni su contenido,
   -- solo cuántos hay y si coinciden con la pregunta, para que la IA avise que el investigador los ocultó.
   if u.role = 'student' and cardinality(scope) > 0 then
